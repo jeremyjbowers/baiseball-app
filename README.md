@@ -23,6 +23,20 @@ cargo run --bin play
 
 `cargo run --bin play` reads `fixtures/game.json` and plays one game. The game is a new draw every time.
 
+## Step a game
+
+```bash
+cargo run --bin serve
+```
+
+The server listens on `0.0.0.0:41731`. Open `http://127.0.0.1:41731`. Start reads `fixtures/game.json` and keeps that game in memory until the process stops.
+
+- `POST /api/games` opens the fixture and returns an id and the state.
+- `GET /api/games/:id` reads that saved state.
+- `POST /api/games/:id/plate-appearances` resolves one plate appearance. The body may be empty, or `{"call":"bunt"}`, `intentional_walk`, `steal`, or `hit_and_run`.
+
+Leaving the page does not play the next batter. The page is one person stepping the game.
+
 ## Later
 
 AWS Lambda, DigitalOcean, and App Engine are later places this can run. This slice does not implement them. It runs with Cargo.
