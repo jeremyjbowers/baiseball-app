@@ -1,0 +1,11 @@
+[package]
+name = "baseball_engine"
+version = "0.1.0"
+edition = "2021"
+description = "One-game baseball engine: state machine, at-bat simulator, and a minimal computer manager."
+license = "MIT"
+
+[dependencies]
+rand = "0.8.5"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
