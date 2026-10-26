@@ -40,3 +40,30 @@ Leaving the page does not play the next batter. The page is one person stepping 
 ## Later
 
 AWS Lambda, DigitalOcean, and App Engine are later places this can run. This slice does not implement them. It runs with Cargo.
+
+## League office
+
+The office is two processes. The Rust API in `admin-api/` owns leagues, divisions, teams, lineups, owners, and magic-link tokens in SQLite. The Svelte app in `web/` calls that API and stores only the signed-in session. Neither one changes the plate-appearance simulator.
+
+```bash
+cd admin-api
+cargo run
+```
+
+The API listens on `0.0.0.0:41742`.
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+The app listens on `0.0.0.0:41741`. Open `http://127.0.0.1:41741`. Sign in with an email address. This slice has no mail provider: the magic link is printed in the API log and shown on the confirmation screen.
+
+With the API running:
+
+```bash
+node admin-api/scripts/prove-admin.mjs
+```
+
+The route contract is `docs/admin-api.md` in the project notes.
