@@ -5,7 +5,6 @@
   import Field from "../lib/Field.svelte";
 
   let { expired = false } = $props();
-  let email = $state("");
   let pending = $state(false);
   let error = $state("");
 
@@ -15,6 +14,7 @@
 
   async function submit(event) {
     event.preventDefault();
+    const email = String(new FormData(event.currentTarget).get("email") ?? "").trim();
     pending = true;
     error = "";
     try {
@@ -43,7 +43,7 @@
     </div>
     {#if error}<div class="alert error" role="alert"><strong>Could not sign in</strong><p>{error}</p></div>{/if}
     <Field id="email" label="Email address">
-      <input id="email" type="email" autocomplete="email" required bind:value={email} />
+      <input id="email" name="email" type="email" autocomplete="email" required />
     </Field>
     <button type="submit" disabled={pending}>{pending ? "Sending the link…" : "Email me a sign-in link"}</button>
     <p class="hint">This machine has no mail provider. The link is printed in the server log and shown on the next screen. That confirmation is for local development only.</p>
