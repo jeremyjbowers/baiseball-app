@@ -24,7 +24,8 @@ export function match(value) {
   const url = new URL(value, window.location.origin);
   const pathname = url.pathname;
   const params = url.searchParams;
-  if (pathname === "/") return { name: "sign-in", params };
+  if (pathname === "/") return { name: "home" };
+  if (pathname === "/sign-in") return { name: "sign-in", params };
   if (pathname === "/sign-in/sent") return { name: "sent" };
   if (pathname === "/auth/verify") return { name: "verify", params };
   if (pathname === "/terms" || pathname === "/terms/") return { name: "terms" };
@@ -50,4 +51,18 @@ export function match(value) {
   found = pathname.match(/^\/teams\/([^/]+)$/);
   if (found) return { name: "team", id: decodeURIComponent(found[1]) };
   return { name: "missing" };
+}
+
+export function requiresLogin(name) {
+  return [
+    "leagues",
+    "new-league",
+    "league",
+    "schedule",
+    "teams",
+    "team",
+    "new-lineup",
+    "lineup",
+    "account",
+  ].includes(name);
 }

@@ -1,8 +1,4 @@
 <div class="narrow stack legal">
-  <div class="brand">
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path fill="#8d2f2f" d="M2.5 1.5h13v8.4L9 16.5 2.5 9.9V1.5z"/></svg>
-    <strong>League office</strong>
-  </div>
   <div class="card stack">
     <div>
       <h1>Privacy Policy</h1>
@@ -24,6 +20,6 @@
     <p>Owner and league records remain until you delete them or ask us to remove them. You may sign in by email without a phone number, remove your phone number on the Account page, reply STOP to opt out of texts, or email us to request access or deletion.</p>
     <h2>6. Contact</h2>
     <p>League office / bAIseball · <a class="link" href="mailto:jeremyjbowers@gmail.com">jeremyjbowers@gmail.com</a> · <a class="link" href="https://baiseball.app">https://baiseball.app</a></p>
-    <p class="muted"><a class="link" href="/terms/">Terms of Service</a> · <a class="link" href="/">Sign in</a></p>
+    <p class="muted"><a class="link" href="/terms/">Terms of Service</a> · <a class="link" href="/sign-in">Sign in</a> · <a class="link" href="/">Home</a></p>
   </div>
 </div>
