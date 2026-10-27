@@ -3,14 +3,24 @@
   import { navigate } from "../lib/nav.js";
   import { setPending } from "../lib/pending.js";
   import Field from "../lib/Field.svelte";
+  import SmsConsent from "../lib/SmsConsent.svelte";
 
   let { expired = false } = $props();
   let channel = $state("email");
   let pending = $state(false);
   let error = $state("");
+  let smsTransactional = $state(false);
+  let smsTerms = $state(false);
 
   $effect(() => {
     if (expired) error = "That sign-in link is expired or already used. Request another.";
+  });
+
+  $effect(() => {
+    if (channel !== "sms") {
+      smsTransactional = false;
+      smsTerms = false;
+    }
   });
 
   async function submit(event) {
@@ -18,12 +28,20 @@
     const data = new FormData(event.currentTarget);
     const email = String(data.get("email") ?? "").trim();
     const phone = String(data.get("phone") ?? "").trim();
+    if (channel === "sms" && (!smsTransactional || !smsTerms)) {
+      error = "Confirm the text-message consent and the Terms before asking for a text.";
+      return;
+    }
     pending = true;
     error = "";
     try {
+      const body =
+        channel === "sms"
+          ? { phone, smsConsent: true, termsConsent: true }
+          : { email };
       const issued = await api("/auth/magic-links", {
         method: "POST",
-        body: JSON.stringify(channel === "sms" ? { phone } : { email }),
+        body: JSON.stringify(body),
       });
       setPending(issued);
       navigate("/sign-in/sent");
@@ -57,15 +75,19 @@
       </label>
     </fieldset>
     {#if channel === "sms"}
-      <Field id="phone" label="Phone number" hint="Include the country code, starting with +.">
-        <input id="phone" name="phone" type="tel" autocomplete="tel" required />
+      <Field id="phone" label="Mobile phone number" hint="Include the country code, starting with +.">
+        <input id="phone" name="phone" type="tel" autocomplete="tel" placeholder="+1 (555) 000-0000" required />
       </Field>
+      <SmsConsent idPrefix="signin" purpose="sign-in" bind:transactional={smsTransactional} bind:terms={smsTerms} />
     {:else}
       <Field id="email" label="Email address">
         <input id="email" name="email" type="email" autocomplete="email" required />
       </Field>
     {/if}
-    <button type="submit" disabled={pending}>{pending ? "Sending the link…" : channel === "sms" ? "Text me a sign-in link" : "Email me a sign-in link"}</button>
+    <button type="submit" disabled={pending || (channel === "sms" && (!smsTransactional || !smsTerms))}>
+      {pending ? "Sending the link…" : channel === "sms" ? "Yes, text me a sign-in link" : "Email me a sign-in link"}
+    </button>
     <p class="hint">If Mailgun or Twilio is not configured on this machine, the link is shown on the next screen. That confirmation is for local development only.</p>
+    <p class="hint"><a class="link" href="/terms">Terms of Service</a> · <a class="link" href="/privacy">Privacy Policy</a></p>
   </form>
 </div>

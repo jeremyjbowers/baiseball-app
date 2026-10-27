@@ -8,10 +8,12 @@
   import LineupPage from "./pages/LineupPage.svelte";
   import NewLeague from "./pages/NewLeague.svelte";
   import SchedulePage from "./pages/SchedulePage.svelte";
+  import Privacy from "./pages/Privacy.svelte";
   import Sent from "./pages/Sent.svelte";
   import SignIn from "./pages/SignIn.svelte";
   import TeamPage from "./pages/TeamPage.svelte";
   import Teams from "./pages/Teams.svelte";
+  import Terms from "./pages/Terms.svelte";
   import Verify from "./pages/Verify.svelte";
 
   let view = $derived(match($route));
@@ -70,6 +72,10 @@
     <Sent />
   {:else if view.name === "verify"}
     <Verify token={view.params.get("token") ?? ""} />
+  {:else if view.name === "terms"}
+    <Terms />
+  {:else if view.name === "privacy"}
+    <Privacy />
   {:else if office && !session}
     <div class="status" role="status">Sign in to continue.</div>
   {:else if view.name === "account"}

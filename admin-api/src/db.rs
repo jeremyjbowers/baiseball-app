@@ -318,6 +318,10 @@ fn migrate(conn: &mut Db) -> Result<(), ApiError> {
         conn.batch("ALTER TABLE owners ADD COLUMN is_admin BOOLEAN NOT NULL DEFAULT FALSE;")
             .map_err(db_err)?;
     }
+    if !has_column(conn, "owners", "sms_consent_at")? {
+        conn.batch("ALTER TABLE owners ADD COLUMN sms_consent_at TEXT;")
+            .map_err(db_err)?;
+    }
     if !has_column(conn, "leagues", "league_type")? {
         conn.batch(
             "

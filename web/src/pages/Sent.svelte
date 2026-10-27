@@ -35,6 +35,11 @@
     <div class="card stack">
       <h1>{byText ? "Check your phone" : "Check your email"}</h1>
       <p class="muted">A sign-in link was sent to {issued.destination}. It works once and expires {formatWhen(issued.expiresAt)}.</p>
+      {#if byText}
+        <div class="sms-disclosure" role="note">
+          <p><strong>Msg &amp; data rates may apply.</strong> Reply <strong>STOP</strong> to opt out of League office texts. Reply <strong>HELP</strong> for help.</p>
+        </div>
+      {/if}
       <a class="link" href="/">Use a different address</a>
     </div>
   {/if}

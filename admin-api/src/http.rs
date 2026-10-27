@@ -157,9 +157,11 @@ pub async fn update_owner(
         .get("phone")
         .and_then(Value::as_str)
         .map(str::to_string);
+    let sms_consent = body.get("smsConsent").and_then(Value::as_bool) == Some(true);
+    let terms_consent = body.get("termsConsent").and_then(Value::as_bool) == Some(true);
     let owner = with_db(&state, move |db| {
         let owner = store::require_owner(db, &token)?;
-        store::set_phone(db, &owner.id, phone.as_deref())
+        store::set_phone(db, &owner.id, phone.as_deref(), sms_consent, terms_consent)
     })
     .await?;
     json_response(

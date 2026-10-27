@@ -117,10 +117,30 @@ pub fn bootstrap_admin(conn: &mut Db, email: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-pub fn set_phone(conn: &mut Db, owner_id: &str, phone: Option<&str>) -> Result<Owner, ApiError> {
+pub fn set_phone(
+    conn: &mut Db,
+    owner_id: &str,
+    phone: Option<&str>,
+    sms_consent: bool,
+    terms_consent: bool,
+) -> Result<Owner, ApiError> {
     let phone = match phone.map(str::trim).filter(|value| !value.is_empty()) {
         Some(value) => Some(validate::parse_phone(value)?),
         None => None,
+    };
+    let current = owner_by_id(conn, owner_id)?.ok_or_else(ApiError::unauthorized)?;
+    if phone.as_deref() == current.phone.as_deref() {
+        return Ok(current);
+    }
+    let consent_at = if phone.is_some() {
+        if !sms_consent || !terms_consent {
+            return Err(ApiError::bad(
+                "Confirm text-message consent and the Terms before saving a phone number.",
+            ));
+        }
+        Some(now_iso())
+    } else {
+        None
     };
     if let Some(phone) = phone.as_deref() {
         let taken = conn
@@ -138,8 +158,8 @@ pub fn set_phone(conn: &mut Db, owner_id: &str, phone: Option<&str>) -> Result<O
         }
     }
     conn.execute(
-        "UPDATE owners SET phone = $1 WHERE id = $2",
-        params!(phone, owner_id),
+        "UPDATE owners SET phone = $1, sms_consent_at = $2 WHERE id = $3",
+        params!(phone, consent_at, owner_id),
     )
     .map_err(db_err)?;
     owner_by_id(conn, owner_id)?.ok_or_else(ApiError::unauthorized)
@@ -194,6 +214,11 @@ fn manage_league(conn: &mut Db, viewer_id: &str, league_id: &str) -> Result<Valu
     }
 }
 
+fn sms_consents(record: &serde_json::Map<String, Value>) -> bool {
+    record.get("smsConsent").and_then(Value::as_bool) == Some(true)
+        && record.get("termsConsent").and_then(Value::as_bool) == Some(true)
+}
+
 pub fn issue_magic_link(conn: &mut Db, body: &Value) -> Result<IssuedLink, ApiError> {
     let record = object(body)?;
     let channel = record
@@ -209,6 +234,11 @@ pub fn issue_magic_link(conn: &mut Db, body: &Value) -> Result<IssuedLink, ApiEr
         .and_then(Value::as_str)
         .is_some_and(|value| !value.trim().is_empty());
     let (owner, channel, destination) = if phone_present && !email_present {
+        if !sms_consents(record) {
+            return Err(ApiError::bad(
+                "Confirm text-message consent and the Terms before asking for a text.",
+            ));
+        }
         let phone =
             validate::parse_phone(record.get("phone").and_then(Value::as_str).unwrap_or(""))?;
         let owner = owner_by_phone(conn, &phone)?.ok_or_else(|| {
@@ -218,6 +248,11 @@ pub fn issue_magic_link(conn: &mut Db, body: &Value) -> Result<IssuedLink, ApiEr
         })?;
         (owner, "sms".to_string(), phone)
     } else if channel == "sms" {
+        if !sms_consents(record) {
+            return Err(ApiError::bad(
+                "Confirm text-message consent and the Terms before asking for a text.",
+            ));
+        }
         let email = validate::parse_email(record.get("email"))?;
         let owner = conn
             .query_row(
@@ -1875,5 +1910,44 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.message.contains("add up"), "{}", error.message);
+    }
+
+    #[test]
+    fn phone_and_sms_magic_links_need_consent() {
+        let mut conn = scratch();
+        let actor = owner_id(&mut conn);
+        match set_phone(&mut conn, &actor, Some("+15551234567"), false, true) {
+            Err(denied) => assert!(
+                denied.message.contains("text-message consent"),
+                "{}",
+                denied.message
+            ),
+            Ok(_) => panic!("expected consent error"),
+        }
+        let saved = set_phone(&mut conn, &actor, Some("+15551234567"), true, true).unwrap();
+        assert_eq!(saved.phone.as_deref(), Some("+15551234567"));
+        let same = set_phone(&mut conn, &actor, Some("+15551234567"), false, false).unwrap();
+        assert_eq!(same.phone.as_deref(), Some("+15551234567"));
+        match issue_magic_link(&mut conn, &json!({ "phone": "+15551234567" })) {
+            Err(sms_denied) => assert!(
+                sms_denied.message.contains("text-message consent"),
+                "{}",
+                sms_denied.message
+            ),
+            Ok(_) => panic!("expected consent error"),
+        }
+        let issued = issue_magic_link(
+            &mut conn,
+            &json!({
+                "phone": "+15551234567",
+                "smsConsent": true,
+                "termsConsent": true
+            }),
+        )
+        .unwrap();
+        assert_eq!(issued.channel, "sms");
+        assert_eq!(issued.destination, "+15551234567");
+        let cleared = set_phone(&mut conn, &actor, None, false, false).unwrap();
+        assert!(cleared.phone.is_none());
     }
 }
