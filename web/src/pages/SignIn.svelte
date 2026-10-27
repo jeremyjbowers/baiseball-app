@@ -88,6 +88,6 @@
       {pending ? "Sending the link…" : channel === "sms" ? "Yes, text me a sign-in link" : "Email me a sign-in link"}
     </button>
     <p class="hint">If Mailgun or Twilio is not configured on this machine, the link is shown on the next screen. That confirmation is for local development only.</p>
-    <p class="hint"><a class="link" href="/terms">Terms of Service</a> · <a class="link" href="/privacy">Privacy Policy</a></p>
+    <p class="hint"><a class="link" href="/terms/">Terms of Service</a> · <a class="link" href="/privacy/">Privacy Policy</a></p>
   </form>
 </div>

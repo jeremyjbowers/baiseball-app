@@ -27,8 +27,8 @@ export function match(value) {
   if (pathname === "/") return { name: "sign-in", params };
   if (pathname === "/sign-in/sent") return { name: "sent" };
   if (pathname === "/auth/verify") return { name: "verify", params };
-  if (pathname === "/terms") return { name: "terms" };
-  if (pathname === "/privacy") return { name: "privacy" };
+  if (pathname === "/terms" || pathname === "/terms/") return { name: "terms" };
+  if (pathname === "/privacy" || pathname === "/privacy/") return { name: "privacy" };
   if (pathname === "/account") return { name: "account" };
   if (pathname === "/leagues") return { name: "leagues" };
   if (pathname === "/leagues/new") return { name: "new-league" };
