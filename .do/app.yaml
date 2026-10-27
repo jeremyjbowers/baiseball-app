@@ -58,6 +58,9 @@ services:
       - key: OWNER_BOOTSTRAP_EMAIL
         scope: RUN_TIME
         value: jeremyjbowers@gmail.com
+      # App-level production env supplies MAILGUN_API_KEY, MAILGUN_DOMAIN,
+      # TWILIO_SID, and TWILIO_CLIENT_SECRET. MAILGUN_FROM and TWILIO_FROM
+      # are optional.
 static_sites:
   - name: web
     git:
