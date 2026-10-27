@@ -529,3 +529,20 @@ pub async fn delete_lineup(
     .await?;
     json_response(StatusCode::OK, json!({ "ok": true }))
 }
+
+pub async fn health() -> impl IntoResponse {
+    (StatusCode::OK, Json(json!({ "ok": true })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::health;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    #[tokio::test]
+    async fn health_reports_ok() {
+        let response = health().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+}
