@@ -43,14 +43,14 @@ AWS Lambda, DigitalOcean, and App Engine are later places this can run. This sli
 
 ## League office
 
-The office is two processes. The Rust API in `admin-api/` owns leagues, divisions, teams, lineups, rivalries, and the schedule in SQLite. The Svelte app in `web/` calls that API and stores no league data. Sign-in is parked. Neither process changes the plate-appearance simulator.
+The office is two processes plus Postgres. The Rust API in `admin-api/` owns leagues, divisions, teams, lineups, rivalries, and the schedule. The Svelte app in `web/` calls that API and stores only the signed-in session. Neither process changes the plate-appearance simulator.
 
 ```bash
 cd admin-api
 cargo run
 ```
 
-The API listens on `0.0.0.0:41742`.
+The API listens on `0.0.0.0:41742`. It reads `DATABASE_URL`. When that is unset, it uses a local Postgres database at `postgres://league:league@127.0.0.1:5432/league_office?sslmode=disable`. `compose.yaml` is the other way to run Postgres, on port 41743. Set `PUBLIC_APP_URL` and `OWNER_BOOTSTRAP_EMAIL` before `cargo run`. See `.do/app.yaml` for the App Platform services.
 
 ```bash
 cd web
@@ -58,7 +58,7 @@ npm install
 npm run dev
 ```
 
-The app listens on `0.0.0.0:41741`. Open `http://127.0.0.1:41741`. The office opens on leagues. Create a league as ULMG or NPL, set the season length and how many games are inside the division and outside it, add divisions and teams, name rivalry pairs, and build the schedule.
+The app listens on `0.0.0.0:41741`. Open `http://127.0.0.1:41741` and sign in. Email uses Mailgun when configured. A text uses Twilio when the owner has saved a phone number. Without those providers, the sign-in link is shown on the next screen.
 
 With the API running:
 
@@ -66,4 +66,4 @@ With the API running:
 node admin-api/scripts/prove-admin.mjs
 ```
 
-The route contract is `docs/admin-api.md` in the project notes. Sign-in routes there are later.
+The route contract is `docs/admin-api.md` in the project notes.

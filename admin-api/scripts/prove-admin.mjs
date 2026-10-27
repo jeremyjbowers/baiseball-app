@@ -1,5 +1,7 @@
 const base = process.env.LEAGUE_OFFICE_URL ?? "http://127.0.0.1:41742";
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+const email = `prover-${stamp}@league-office.test`;
+let sessionToken = "";
 
 function assert(condition, message) {
   if (!condition) {
@@ -8,10 +10,13 @@ function assert(condition, message) {
   }
 }
 
-async function send(pathname, { method = "GET", body } = {}) {
+async function send(pathname, { method = "GET", body, token = sessionToken } = {}) {
   const response = await fetch(`${base}${pathname}`, {
     method,
-    headers: body === undefined ? {} : { "content-type": "application/json" },
+    headers: {
+      ...(body === undefined ? {} : { "content-type": "application/json" }),
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await response.text();
@@ -72,8 +77,32 @@ async function divisionAndTeams(leagueId, groups) {
   return ids;
 }
 
-const open = await send("/leagues");
-assert(open.status === 200 && Array.isArray(open.json.leagues), `leagues without a session ${open.status}`);
+const closed = await send("/leagues");
+assert(closed.status === 401, `leagues without a session should be 401, got ${closed.status}`);
+
+async function signIn(body) {
+  const issued = await send("/auth/magic-links", { method: "POST", body });
+  assert(issued.status === 200 && issued.json.devOnly === true && typeof issued.json.magicLink === "string", `magic link ${issued.status} ${JSON.stringify(issued.json)}`);
+  const token = new URL(issued.json.magicLink).searchParams.get("token");
+  const session = await send("/auth/sessions", { method: "POST", body: { token } });
+  assert(session.status === 200 && session.json.sessionToken, `session ${session.status}`);
+  return { token: session.json.sessionToken, owner: session.json.owner, issued: issued.json };
+}
+
+const admin = await signIn({ email: "jeremyjbowers@gmail.com" });
+assert(admin.owner.isAdmin === true, "bootstrap owner is an admin");
+
+const signed = await signIn({ email });
+sessionToken = signed.token;
+const bearer = sessionToken;
+const phone = "+15555550100";
+const savedPhone = await send("/owners/me", { method: "PATCH", token: bearer, body: { phone } });
+assert(savedPhone.status === 200 && savedPhone.json.owner.phone === phone, `phone ${savedPhone.status} ${JSON.stringify(savedPhone.json)}`);
+const texted = await send("/auth/magic-links", { method: "POST", body: { phone } });
+assert(texted.status === 200 && texted.json.channel === "sms" && texted.json.devOnly === true, `sms ${texted.status} ${JSON.stringify(texted.json)}`);
+
+const open = await send("/leagues", { token: bearer });
+assert(open.status === 200 && Array.isArray(open.json.leagues), `leagues ${open.status}`);
 
 const badSum = await send("/leagues", {
   method: "POST",

@@ -24,8 +24,11 @@ export function match(value) {
   const url = new URL(value, window.location.origin);
   const pathname = url.pathname;
   const params = url.searchParams;
-  if (pathname === "/sign-in/sent" || pathname === "/auth/verify") return { name: "later", params };
-  if (pathname === "/" || pathname === "/leagues") return { name: "leagues" };
+  if (pathname === "/") return { name: "sign-in", params };
+  if (pathname === "/sign-in/sent") return { name: "sent" };
+  if (pathname === "/auth/verify") return { name: "verify", params };
+  if (pathname === "/account") return { name: "account" };
+  if (pathname === "/leagues") return { name: "leagues" };
   if (pathname === "/leagues/new") return { name: "new-league" };
   let found = pathname.match(/^\/leagues\/([^/]+)\/schedule$/);
   if (found) return { name: "schedule", id: decodeURIComponent(found[1]) };

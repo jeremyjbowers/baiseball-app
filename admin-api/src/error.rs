@@ -25,7 +25,6 @@ impl ApiError {
         Self::new(StatusCode::UNAUTHORIZED, "Sign in to continue.")
     }
 
-    #[allow(dead_code)]
     pub fn forbidden(message: impl Into<String>) -> Self {
         Self::new(StatusCode::FORBIDDEN, message)
     }
@@ -52,7 +51,7 @@ impl IntoResponse for ApiError {
     }
 }
 
-pub fn db_err(err: rusqlite::Error) -> ApiError {
-    eprintln!("sqlite: {err}");
+pub fn db_err(err: impl std::fmt::Display) -> ApiError {
+    eprintln!("postgres: {err}");
     ApiError::internal()
 }

@@ -1,0 +1,50 @@
+name: league-office
+region: nyc
+services:
+  - name: api
+    dockerfile_path: admin-api/Dockerfile
+    source_dir: admin-api
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      - key: PUBLIC_APP_URL
+        scope: RUN_TIME
+        value: ${web.PUBLIC_URL}
+      - key: OWNER_BOOTSTRAP_EMAIL
+        scope: RUN_TIME
+        value: jeremyjbowers@gmail.com
+      - key: MAILGUN_API_KEY
+        scope: RUN_TIME
+        type: SECRET
+      - key: MAILGUN_DOMAIN
+        scope: RUN_TIME
+      - key: MAILGUN_FROM
+        scope: RUN_TIME
+      - key: TWILIO_ACCOUNT_SID
+        scope: RUN_TIME
+        type: SECRET
+      - key: TWILIO_AUTH_TOKEN
+        scope: RUN_TIME
+        type: SECRET
+      - key: TWILIO_FROM
+        scope: RUN_TIME
+static_sites:
+  - name: web
+    source_dir: web
+    environment_slug: node-js
+    build_command: npm ci && npm run build
+    output_dir: dist
+    catchall_document: index.html
+    envs:
+      - key: VITE_API_URL
+        scope: BUILD_TIME
+        value: ${api.PUBLIC_URL}
+databases:
+  - name: db
+    engine: PG
+    version: "16"
+    production: true

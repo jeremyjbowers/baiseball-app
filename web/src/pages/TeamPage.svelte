@@ -97,7 +97,7 @@
       <div class="spread">
         <div>
           <h2>Lineups</h2>
-          <p class="muted">Each lineup is the MLB card only. Store one card versus left-handed pitching and one card versus right-handed pitching. Sign-in is later, so lineups are open.</p>
+          <p class="muted">Each lineup is the MLB card only. Store one card versus left-handed pitching and one card versus right-handed pitching. The controlling owner writes the cards. An administrator can write them too.</p>
         </div>
         {#if data.canEditLineups}<a class="button" href="/teams/{data.team.id}/lineups/new">Add a lineup</a>
         {/if}

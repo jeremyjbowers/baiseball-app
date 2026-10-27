@@ -1,11 +1,12 @@
+mod db;
 mod error;
 mod http;
+mod notify;
 mod schedule;
 mod store;
 mod validate;
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use axum::routing::{get, post};
@@ -13,27 +14,40 @@ use axum::Router;
 use http::AppState;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 
-#[tokio::main]
-async fn main() {
-    let db_path = std::env::var("LEAGUE_ADMIN_DB")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("data/league-admin.sqlite"));
-    let web_origin =
-        std::env::var("ADMIN_WEB_ORIGIN").unwrap_or_else(|_| "http://127.0.0.1:41741".to_string());
-    let addr: SocketAddr = std::env::var("ADMIN_API_ADDR")
-        .unwrap_or_else(|_| "0.0.0.0:41742".to_string())
+fn main() {
+    let web_origin = std::env::var("PUBLIC_APP_URL")
+        .or_else(|_| std::env::var("ADMIN_WEB_ORIGIN"))
+        .unwrap_or_else(|_| "http://127.0.0.1:41741".to_string());
+    let addr: SocketAddr = std::env::var("PORT")
+        .map(|port| format!("0.0.0.0:{port}"))
+        .unwrap_or_else(|_| {
+            std::env::var("ADMIN_API_ADDR").unwrap_or_else(|_| "0.0.0.0:41742".to_string())
+        })
         .parse()
-        .expect("ADMIN_API_ADDR must be host:port");
+        .expect("PORT or ADMIN_API_ADDR must be host:port");
 
-    let conn = store::open(&db_path).unwrap_or_else(|err| {
+    let mut conn = store::open().unwrap_or_else(|err| {
         eprintln!("{}", err.message);
         std::process::exit(1);
     });
+    if let Ok(email) = std::env::var("OWNER_BOOTSTRAP_EMAIL") {
+        if let Err(err) = store::bootstrap_admin(&mut conn, &email) {
+            eprintln!("{}", err.message);
+            std::process::exit(1);
+        }
+    }
     let state = AppState {
         db: Arc::new(Mutex::new(conn)),
         web_origin: web_origin.clone(),
     };
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(serve(state, addr, web_origin));
+}
 
+async fn serve(state: AppState, addr: SocketAddr, web_origin: String) {
     let mut origins = vec![
         "http://127.0.0.1:41741".parse().unwrap(),
         "http://localhost:41741".parse().unwrap(),
@@ -52,6 +66,7 @@ async fn main() {
         .route("/auth/magic-links", post(http::magic_link))
         .route("/auth/sessions", post(http::exchange).delete(http::logout))
         .route("/auth/session", get(http::current_session))
+        .route("/owners/me", axum::routing::patch(http::update_owner))
         .route(
             "/leagues",
             get(http::list_leagues).post(http::create_league),

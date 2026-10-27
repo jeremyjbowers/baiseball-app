@@ -58,7 +58,7 @@
 <div class="stack">
   <div>
     <h1>Teams</h1>
-    <p class="muted">Lineups are the MLB card only, one versus left-handed pitching and one versus right-handed pitching. Sign-in is later, so this office can open every team.</p>
+    <p class="muted">Lineups are the MLB card only, one versus left-handed pitching and one versus right-handed pitching. You see the teams you control. An administrator sees every team.</p>
   </div>
   {#if loading}<div class="status" role="status">Loading teams…</div>{/if}
   {#if error}

@@ -1,154 +1,32 @@
 use chrono::{Duration, SecondsFormat, Utc};
 use rand::Rng;
-use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde_json::{json, Value};
 
+use crate::db::{Db, OptionalRow};
 use crate::error::{db_err, ApiError};
 use crate::schedule;
 use crate::validate::{self, object};
 
-const OFFICE_EMAIL: &str = "office@localhost";
+macro_rules! params {
+    ($($p:expr),* $(,)?) => {
+        &[$(&$p as &(dyn ::postgres::types::ToSql + Sync)),*]
+    };
+}
 
 pub struct Owner {
     pub id: String,
     pub email: String,
+    pub phone: Option<String>,
+    pub is_admin: bool,
 }
 
-pub fn open(path: &std::path::Path) -> Result<Connection, ApiError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| {
-            eprintln!("data dir: {err}");
-            ApiError::internal()
-        })?;
-    }
-    let conn = Connection::open(path).map_err(db_err)?;
-    conn.execute_batch(
-        "
-        PRAGMA foreign_keys = ON;
-        PRAGMA journal_mode = WAL;
-        CREATE TABLE IF NOT EXISTS owners (
-          id TEXT PRIMARY KEY,
-          email TEXT NOT NULL UNIQUE,
-          created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS magic_links (
-          token TEXT PRIMARY KEY,
-          owner_id TEXT NOT NULL REFERENCES owners(id),
-          expires_at TEXT NOT NULL,
-          used_at TEXT,
-          created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS sessions (
-          token TEXT PRIMARY KEY,
-          owner_id TEXT NOT NULL REFERENCES owners(id),
-          expires_at TEXT NOT NULL,
-          created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS leagues (
-          id TEXT PRIMARY KEY,
-          name TEXT NOT NULL,
-          lineup_lock TEXT NOT NULL CHECK (lineup_lock IN ('game', 'week', 'half', 'series')),
-          created_by TEXT NOT NULL REFERENCES owners(id),
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          league_type TEXT,
-          season_length INTEGER,
-          division_games INTEGER,
-          outside_games INTEGER
-        );
-        CREATE TABLE IF NOT EXISTS divisions (
-          id TEXT PRIMARY KEY,
-          league_id TEXT NOT NULL REFERENCES leagues(id),
-          name TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          UNIQUE (league_id, name)
-        );
-        CREATE TABLE IF NOT EXISTS teams (
-          id TEXT PRIMARY KEY,
-          league_id TEXT NOT NULL REFERENCES leagues(id),
-          division_id TEXT NOT NULL REFERENCES divisions(id),
-          owner_id TEXT NOT NULL REFERENCES owners(id),
-          name TEXT NOT NULL,
-          home_park TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          UNIQUE (league_id, name)
-        );
-        CREATE TABLE IF NOT EXISTS lineups (
-          id TEXT PRIMARY KEY,
-          team_id TEXT NOT NULL REFERENCES teams(id),
-          name TEXT NOT NULL,
-          vs_lhp TEXT NOT NULL,
-          vs_rhp TEXT NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          UNIQUE (team_id, name)
-        );
-        CREATE TABLE IF NOT EXISTS rivalries (
-          id TEXT PRIMARY KEY,
-          league_id TEXT NOT NULL REFERENCES leagues(id),
-          team_id TEXT NOT NULL REFERENCES teams(id),
-          opponent_team_id TEXT NOT NULL REFERENCES teams(id),
-          games INTEGER NOT NULL,
-          created_at TEXT NOT NULL,
-          UNIQUE (league_id, team_id, opponent_team_id)
-        );
-        CREATE TABLE IF NOT EXISTS schedules (
-          league_id TEXT PRIMARY KEY REFERENCES leagues(id),
-          built_at TEXT NOT NULL,
-          snapshot TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS schedule_games (
-          id TEXT PRIMARY KEY,
-          league_id TEXT NOT NULL REFERENCES leagues(id),
-          round INTEGER NOT NULL,
-          home_team_id TEXT NOT NULL REFERENCES teams(id),
-          away_team_id TEXT NOT NULL REFERENCES teams(id),
-          same_division INTEGER NOT NULL,
-          rivalry INTEGER NOT NULL,
-          created_at TEXT NOT NULL
-        );
-        ",
-    )
-    .map_err(db_err)?;
-    migrate(&conn)?;
-    office_owner(&conn)?;
-    Ok(conn)
+pub fn open() -> Result<Db, ApiError> {
+    crate::db::open()
 }
 
-fn has_column(conn: &Connection, table: &str, column: &str) -> Result<bool, ApiError> {
-    let mut stmt = conn
-        .prepare(&format!("PRAGMA table_info({table})"))
-        .map_err(db_err)?;
-    let names = stmt
-        .query_map([], |row| row.get::<_, String>(1))
-        .map_err(db_err)?;
-    for name in names {
-        if name.map_err(db_err)? == column {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn migrate(conn: &Connection) -> Result<(), ApiError> {
-    if !has_column(conn, "leagues", "league_type")? {
-        conn.execute_batch(
-            "
-            ALTER TABLE leagues ADD COLUMN league_type TEXT;
-            ALTER TABLE leagues ADD COLUMN season_length INTEGER;
-            ALTER TABLE leagues ADD COLUMN division_games INTEGER;
-            ALTER TABLE leagues ADD COLUMN outside_games INTEGER;
-            ",
-        )
-        .map_err(db_err)?;
-    }
-    Ok(())
-}
-
-pub fn office_owner(conn: &Connection) -> Result<Owner, ApiError> {
-    upsert_owner(conn, OFFICE_EMAIL)
+#[cfg(test)]
+pub fn open_test() -> Result<Db, ApiError> {
+    crate::db::open_test()
 }
 
 fn now_iso() -> String {
@@ -179,20 +57,22 @@ fn new_token() -> String {
     random_hex(32)
 }
 
-fn count(conn: &Connection, sql: &str, param: &str) -> Result<i64, ApiError> {
-    conn.query_row(sql, [param], |row| row.get(0))
+fn count(conn: &mut Db, sql: &str, param: &str) -> Result<i64, ApiError> {
+    conn.query_row(sql, params!(param), |row| row.get(0))
         .map_err(db_err)
 }
 
-pub fn upsert_owner(conn: &Connection, email: &str) -> Result<Owner, ApiError> {
+pub fn upsert_owner(conn: &mut Db, email: &str) -> Result<Owner, ApiError> {
     if let Some(owner) = conn
         .query_row(
-            "SELECT id, email FROM owners WHERE email = ?1",
-            [email],
+            "SELECT id, email, phone, is_admin FROM owners WHERE email = $1",
+            params!(email),
             |row| {
                 Ok(Owner {
                     id: row.get(0)?,
                     email: row.get(1)?,
+                    phone: row.get(2)?,
+                    is_admin: row.get(3)?,
                 })
             },
         )
@@ -203,70 +83,221 @@ pub fn upsert_owner(conn: &Connection, email: &str) -> Result<Owner, ApiError> {
     }
     let id = new_id();
     conn.execute(
-        "INSERT INTO owners (id, email, created_at) VALUES (?1, ?2, ?3)",
-        params![id, email, now_iso()],
+        "INSERT INTO owners (id, email, created_at) VALUES ($1, $2, $3)",
+        params!(id, email, now_iso()),
     )
     .map_err(db_err)?;
     Ok(Owner {
         id,
         email: email.to_string(),
+        phone: None,
+        is_admin: false,
     })
 }
 
-pub fn issue_magic_link(
-    conn: &mut Connection,
-    body: &Value,
-) -> Result<(String, String, String), ApiError> {
-    let email = validate::parse_email(object(body)?.get("email"))?;
+pub struct IssuedLink {
+    pub channel: String,
+    pub destination: String,
+    pub token: String,
+    pub expires_at: String,
+}
+
+pub fn bootstrap_admin(conn: &mut Db, email: &str) -> Result<(), ApiError> {
+    let email = email.trim().to_lowercase();
+    if email.is_empty() {
+        return Ok(());
+    }
+    let email = validate::parse_email(Some(&Value::String(email)))?;
     let owner = upsert_owner(conn, &email)?;
+    conn.execute(
+        "UPDATE owners SET is_admin = TRUE WHERE id = $1",
+        params!(owner.id),
+    )
+    .map_err(db_err)?;
+    Ok(())
+}
+
+pub fn set_phone(conn: &mut Db, owner_id: &str, phone: Option<&str>) -> Result<Owner, ApiError> {
+    let phone = match phone.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(value) => Some(validate::parse_phone(value)?),
+        None => None,
+    };
+    if let Some(phone) = phone.as_deref() {
+        let taken = conn
+            .query_row(
+                "SELECT id FROM owners WHERE phone = $1 AND id != $2",
+                params!(phone, owner_id),
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map_err(db_err)?;
+        if taken.is_some() {
+            return Err(ApiError::conflict(
+                "Another owner already uses that phone number.",
+            ));
+        }
+    }
+    conn.execute(
+        "UPDATE owners SET phone = $1 WHERE id = $2",
+        params!(phone, owner_id),
+    )
+    .map_err(db_err)?;
+    owner_by_id(conn, owner_id)?.ok_or_else(ApiError::unauthorized)
+}
+
+fn owner_by_id(conn: &mut Db, owner_id: &str) -> Result<Option<Owner>, ApiError> {
+    conn.query_row(
+        "SELECT id, email, phone, is_admin FROM owners WHERE id = $1",
+        params!(owner_id),
+        |row| {
+            Ok(Owner {
+                id: row.get(0)?,
+                email: row.get(1)?,
+                phone: row.get(2)?,
+                is_admin: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db_err)
+}
+
+fn owner_by_phone(conn: &mut Db, phone: &str) -> Result<Option<Owner>, ApiError> {
+    conn.query_row(
+        "SELECT id, email, phone, is_admin FROM owners WHERE phone = $1",
+        params!(phone),
+        |row| {
+            Ok(Owner {
+                id: row.get(0)?,
+                email: row.get(1)?,
+                phone: row.get(2)?,
+                is_admin: row.get(3)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(db_err)
+}
+
+fn is_admin(conn: &mut Db, viewer_id: &str) -> Result<bool, ApiError> {
+    Ok(owner_by_id(conn, viewer_id)?.is_some_and(|owner| owner.is_admin))
+}
+
+fn manage_league(conn: &mut Db, viewer_id: &str, league_id: &str) -> Result<Value, ApiError> {
+    let league = require_league(conn, league_id)?;
+    if is_admin(conn, viewer_id)? || league["createdBy"].as_str() == Some(viewer_id) {
+        Ok(league)
+    } else {
+        Err(ApiError::forbidden(
+            "Only the league administrator can change this league.",
+        ))
+    }
+}
+
+pub fn issue_magic_link(conn: &mut Db, body: &Value) -> Result<IssuedLink, ApiError> {
+    let record = object(body)?;
+    let channel = record
+        .get("channel")
+        .and_then(Value::as_str)
+        .unwrap_or("email");
+    let email_present = record
+        .get("email")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    let phone_present = record
+        .get("phone")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    let (owner, channel, destination) = if phone_present && !email_present {
+        let phone =
+            validate::parse_phone(record.get("phone").and_then(Value::as_str).unwrap_or(""))?;
+        let owner = owner_by_phone(conn, &phone)?.ok_or_else(|| {
+            ApiError::not_found(
+                "No owner has that phone number. Sign in by email, then save a phone number.",
+            )
+        })?;
+        (owner, "sms".to_string(), phone)
+    } else if channel == "sms" {
+        let email = validate::parse_email(record.get("email"))?;
+        let owner = conn
+            .query_row(
+                "SELECT id, email, phone, is_admin FROM owners WHERE email = $1",
+                params!(email),
+                |row| {
+                    Ok(Owner {
+                        id: row.get(0)?,
+                        email: row.get(1)?,
+                        phone: row.get(2)?,
+                        is_admin: row.get(3)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(db_err)?
+            .ok_or_else(|| ApiError::bad("Sign in by email before asking for a text."))?;
+        let phone = owner
+            .phone
+            .clone()
+            .ok_or_else(|| ApiError::bad("Save a phone number before asking for a text."))?;
+        (owner, "sms".to_string(), phone)
+    } else if channel != "email" {
+        return Err(ApiError::bad("Choose email or text for the sign-in link."));
+    } else {
+        let email = validate::parse_email(record.get("email"))?;
+        let owner = upsert_owner(conn, &email)?;
+        (owner, "email".to_string(), email)
+    };
     let token = new_token();
     let created_at = now_iso();
     let expires_at = later_iso(Duration::minutes(15));
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(db_err)?;
+    let mut tx = conn.transaction().map_err(db_err)?;
     tx.execute(
-        "DELETE FROM magic_links WHERE owner_id = ?1 AND used_at IS NULL",
-        [&owner.id],
+        "DELETE FROM magic_links WHERE owner_id = $1 AND used_at IS NULL",
+        params!(owner.id),
     )
     .map_err(db_err)?;
     tx.execute(
-        "INSERT INTO magic_links (token, owner_id, expires_at, used_at, created_at) VALUES (?1, ?2, ?3, NULL, ?4)",
-        params![token, owner.id, expires_at, created_at],
+        "INSERT INTO magic_links (token, owner_id, expires_at, used_at, created_at) VALUES ($1, $2, $3, NULL, $4)",
+        params!(token, owner.id, expires_at, created_at),
     )
     .map_err(db_err)?;
     tx.commit().map_err(db_err)?;
-    Ok((email, token, expires_at))
+    Ok(IssuedLink {
+        channel,
+        destination,
+        token,
+        expires_at,
+    })
 }
 
 pub fn redeem_magic_link(
-    conn: &mut Connection,
+    conn: &mut Db,
     token: &str,
 ) -> Result<Option<(String, String, Owner)>, ApiError> {
     if token.is_empty() {
         return Ok(None);
     }
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(db_err)?;
+    let mut tx = conn.transaction().map_err(db_err)?;
     let row = tx
         .query_row(
-            "SELECT m.owner_id, m.expires_at, m.used_at, o.email
+            "SELECT m.owner_id, m.expires_at, m.used_at, o.email, o.phone, o.is_admin
              FROM magic_links m JOIN owners o ON o.id = m.owner_id
-             WHERE m.token = ?1",
-            [token],
+             WHERE m.token = $1",
+            params!(token),
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, Option<String>>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, bool>(5)?,
                 ))
             },
         )
         .optional()
         .map_err(db_err)?;
-    let Some((owner_id, expires_at, used_at, email)) = row else {
+    let Some((owner_id, expires_at, used_at, email, phone, is_admin)) = row else {
         return Ok(None);
     };
     if used_at.is_some() || expires_at <= now_iso() {
@@ -274,15 +305,15 @@ pub fn redeem_magic_link(
     }
     let used = now_iso();
     tx.execute(
-        "UPDATE magic_links SET used_at = ?1 WHERE token = ?2",
-        params![used, token],
+        "UPDATE magic_links SET used_at = $1 WHERE token = $2",
+        params!(used, token),
     )
     .map_err(db_err)?;
     let session = new_token();
     let session_expires = later_iso(Duration::days(7));
     tx.execute(
-        "INSERT INTO sessions (token, owner_id, expires_at, created_at) VALUES (?1, ?2, ?3, ?4)",
-        params![session, owner_id, session_expires, used],
+        "INSERT INTO sessions (token, owner_id, expires_at, created_at) VALUES ($1, $2, $3, $4)",
+        params!(session, owner_id, session_expires, used),
     )
     .map_err(db_err)?;
     tx.commit().map_err(db_err)?;
@@ -292,51 +323,60 @@ pub fn redeem_magic_link(
         Owner {
             id: owner_id,
             email,
+            phone,
+            is_admin,
         },
     )))
 }
 
-pub fn owner_from_session(conn: &Connection, token: &str) -> Result<Option<Owner>, ApiError> {
+pub fn owner_from_session(conn: &mut Db, token: &str) -> Result<Option<Owner>, ApiError> {
     if token.is_empty() {
         return Ok(None);
     }
     let row = conn
         .query_row(
-            "SELECT o.id, o.email, s.expires_at FROM sessions s
-             JOIN owners o ON o.id = s.owner_id WHERE s.token = ?1",
-            [token],
+            "SELECT o.id, o.email, o.phone, o.is_admin, s.expires_at FROM sessions s
+             JOIN owners o ON o.id = s.owner_id WHERE s.token = $1",
+            params!(token),
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, bool>(3)?,
+                    row.get::<_, String>(4)?,
                 ))
             },
         )
         .optional()
         .map_err(db_err)?;
-    let Some((id, email, expires_at)) = row else {
+    let Some((id, email, phone, is_admin, expires_at)) = row else {
         return Ok(None);
     };
     if expires_at <= now_iso() {
-        conn.execute("DELETE FROM sessions WHERE token = ?1", [token])
+        conn.execute("DELETE FROM sessions WHERE token = $1", params!(token))
             .map_err(db_err)?;
         return Ok(None);
     }
-    Ok(Some(Owner { id, email }))
+    Ok(Some(Owner {
+        id,
+        email,
+        phone,
+        is_admin,
+    }))
 }
 
-pub fn require_owner(conn: &Connection, token: &str) -> Result<Owner, ApiError> {
+pub fn require_owner(conn: &mut Db, token: &str) -> Result<Owner, ApiError> {
     owner_from_session(conn, token)?.ok_or_else(ApiError::unauthorized)
 }
 
-pub fn delete_session(conn: &Connection, token: &str) -> Result<(), ApiError> {
-    conn.execute("DELETE FROM sessions WHERE token = ?1", [token])
+pub fn delete_session(conn: &mut Db, token: &str) -> Result<(), ApiError> {
+    conn.execute("DELETE FROM sessions WHERE token = $1", params!(token))
         .map_err(db_err)?;
     Ok(())
 }
 
-fn league_row(conn: &Connection, league_id: &str) -> Result<Option<Value>, ApiError> {
+fn league_row(conn: &mut Db, league_id: &str) -> Result<Option<Value>, ApiError> {
     let row = conn
         .query_row(
             "SELECT l.id, l.name, l.lineup_lock, l.created_by, l.created_at, l.updated_at,
@@ -344,8 +384,8 @@ fn league_row(conn: &Connection, league_id: &str) -> Result<Option<Value>, ApiEr
                     (SELECT COUNT(*) FROM divisions d WHERE d.league_id = l.id),
                     l.league_type, l.season_length, l.division_games, l.outside_games,
                     (SELECT COUNT(*) FROM schedule_games g WHERE g.league_id = l.id)
-             FROM leagues l WHERE l.id = ?1",
-            [league_id],
+             FROM leagues l WHERE l.id = $1",
+            params!(league_id),
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -387,10 +427,10 @@ fn league_row(conn: &Connection, league_id: &str) -> Result<Option<Value>, ApiEr
     let (in_bounds, bound_label) = validate::team_bound(team_count);
     let mut divisions = Vec::new();
     let mut stmt = conn
-        .prepare("SELECT id, league_id, name, created_at, updated_at FROM divisions WHERE league_id = ?1 ORDER BY name")
+        .prepare("SELECT id, league_id, name, created_at, updated_at FROM divisions WHERE league_id = $1 ORDER BY name")
         .map_err(db_err)?;
     let rows = stmt
-        .query_map([league_id], |row| {
+        .query_map(params!(league_id), |row| {
             Ok(json!({
                 "id": row.get::<_, String>(0)?,
                 "leagueId": row.get::<_, String>(1)?,
@@ -425,19 +465,19 @@ fn league_row(conn: &Connection, league_id: &str) -> Result<Option<Value>, ApiEr
     })))
 }
 
-fn rivalry_rows(conn: &Connection, league_id: &str) -> Result<Vec<Value>, ApiError> {
+fn rivalry_rows(conn: &mut Db, league_id: &str) -> Result<Vec<Value>, ApiError> {
     let mut stmt = conn
         .prepare(
             "SELECT r.id, r.team_id, ta.name, r.opponent_team_id, tb.name, r.games
              FROM rivalries r
              JOIN teams ta ON ta.id = r.team_id
              JOIN teams tb ON tb.id = r.opponent_team_id
-             WHERE r.league_id = ?1
+             WHERE r.league_id = $1
              ORDER BY ta.name, tb.name",
         )
         .map_err(db_err)?;
     let rows = stmt
-        .query_map([league_id], |row| {
+        .query_map(params!(league_id), |row| {
             Ok(json!({
                 "id": row.get::<_, String>(0)?,
                 "teamId": row.get::<_, String>(1)?,
@@ -451,19 +491,28 @@ fn rivalry_rows(conn: &Connection, league_id: &str) -> Result<Vec<Value>, ApiErr
     rows.collect::<Result<Vec<_>, _>>().map_err(db_err)
 }
 
-fn require_league(conn: &Connection, league_id: &str) -> Result<Value, ApiError> {
+fn require_league(conn: &mut Db, league_id: &str) -> Result<Value, ApiError> {
     league_row(conn, league_id)?
         .ok_or_else(|| ApiError::not_found("That league is not in the office."))
 }
 
-pub fn list_leagues(conn: &Connection, _viewer_id: &str) -> Result<Vec<Value>, ApiError> {
+pub fn list_leagues(conn: &mut Db, viewer_id: &str) -> Result<Vec<Value>, ApiError> {
+    let admin = is_admin(conn, viewer_id)?;
     let ids = {
-        let mut stmt = conn
-            .prepare("SELECT id FROM leagues ORDER BY name")
-            .map_err(db_err)?;
-        let mapped = stmt
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(db_err)?;
+        let mut stmt = if admin {
+            conn.prepare("SELECT id FROM leagues ORDER BY name")
+                .map_err(db_err)?
+        } else {
+            conn.prepare("SELECT id FROM leagues WHERE created_by = $1 ORDER BY name")
+                .map_err(db_err)?
+        };
+        let mapped = if admin {
+            stmt.query_map(params!(), |row| row.get::<_, String>(0))
+                .map_err(db_err)?
+        } else {
+            stmt.query_map(params!(viewer_id), |row| row.get::<_, String>(0))
+                .map_err(db_err)?
+        };
         mapped.collect::<Result<Vec<_>, _>>().map_err(db_err)?
     };
     let mut leagues = Vec::new();
@@ -475,7 +524,7 @@ pub fn list_leagues(conn: &Connection, _viewer_id: &str) -> Result<Vec<Value>, A
     Ok(leagues)
 }
 
-pub fn create_league(conn: &Connection, viewer_id: &str, body: &Value) -> Result<Value, ApiError> {
+pub fn create_league(conn: &mut Db, viewer_id: &str, body: &Value) -> Result<Value, ApiError> {
     let record = object(body)?;
     let name = validate::required_text(record.get("name"), "League name")?;
     let league_type = validate::parse_league_type(record.get("leagueType"))?;
@@ -507,27 +556,27 @@ pub fn create_league(conn: &Connection, viewer_id: &str, body: &Value) -> Result
     let timestamp = now_iso();
     conn.execute(
         "INSERT INTO leagues (id, name, lineup_lock, created_by, created_at, updated_at, league_type, season_length, division_games, outside_games)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        params![id, name, lock, viewer_id, timestamp, timestamp, league_type, season_length, division_games, outside_games],
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        params!(id, name, lock, viewer_id, timestamp, timestamp, league_type, i64::from(season_length), i64::from(division_games), i64::from(outside_games)),
     )
     .map_err(db_err)?;
     require_league(conn, &id)
 }
 
-pub fn get_league(conn: &Connection, _viewer_id: &str, league_id: &str) -> Result<Value, ApiError> {
-    require_league(conn, league_id)
+pub fn get_league(conn: &mut Db, viewer_id: &str, league_id: &str) -> Result<Value, ApiError> {
+    manage_league(conn, viewer_id, league_id)
 }
 
 fn json_count(value: &Value) -> Option<u32> {
     value.as_u64().and_then(|number| u32::try_from(number).ok())
 }
 
-fn team_divisions(conn: &Connection, league_id: &str) -> Result<Vec<(String, String)>, ApiError> {
+fn team_divisions(conn: &mut Db, league_id: &str) -> Result<Vec<(String, String)>, ApiError> {
     let mut stmt = conn
-        .prepare("SELECT id, division_id FROM teams WHERE league_id = ?1 ORDER BY id")
+        .prepare("SELECT id, division_id FROM teams WHERE league_id = $1 ORDER BY id")
         .map_err(db_err)?;
     let rows = stmt
-        .query_map([league_id], |row| {
+        .query_map(params!(league_id), |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
         .map_err(db_err)?;
@@ -535,14 +584,14 @@ fn team_divisions(conn: &Connection, league_id: &str) -> Result<Vec<(String, Str
 }
 
 fn stored_rivalries(
-    conn: &Connection,
+    conn: &mut Db,
     league_id: &str,
 ) -> Result<Vec<validate::RivalryInput>, ApiError> {
     let mut stmt = conn
-        .prepare("SELECT team_id, opponent_team_id, games FROM rivalries WHERE league_id = ?1 ORDER BY team_id, opponent_team_id")
+        .prepare("SELECT team_id, opponent_team_id, games FROM rivalries WHERE league_id = $1 ORDER BY team_id, opponent_team_id")
         .map_err(db_err)?;
     let rows = stmt
-        .query_map([league_id], |row| {
+        .query_map(params!(league_id), |row| {
             Ok(validate::RivalryInput {
                 team_id: row.get(0)?,
                 opponent_team_id: row.get(1)?,
@@ -598,12 +647,12 @@ fn ensure_rivalries_fit(
 }
 
 pub fn update_league(
-    conn: &mut Connection,
-    _viewer_id: &str,
+    conn: &mut Db,
+    viewer_id: &str,
     league_id: &str,
     body: &Value,
 ) -> Result<Value, ApiError> {
-    let league = require_league(conn, league_id)?;
+    let league = manage_league(conn, viewer_id, league_id)?;
     let record = object(body)?;
     let name = if record.contains_key("name") {
         validate::required_text(record.get("name"), "League name")?
@@ -687,22 +736,23 @@ pub fn update_league(
             effective,
         )?;
     }
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(db_err)?;
+    let mut tx = conn.transaction().map_err(db_err)?;
     tx.execute(
-        "UPDATE leagues SET name = ?1, lineup_lock = ?2, league_type = ?3, season_length = ?4, division_games = ?5, outside_games = ?6, updated_at = ?7 WHERE id = ?8",
-        params![name, lock, league_type, season_length.map(i64::from), division_games.map(i64::from), outside_games.map(i64::from), now_iso(), league_id],
+        "UPDATE leagues SET name = $1, lineup_lock = $2, league_type = $3, season_length = $4, division_games = $5, outside_games = $6, updated_at = $7 WHERE id = $8",
+        params!(name, lock, league_type, season_length.map(i64::from), division_games.map(i64::from), outside_games.map(i64::from), now_iso(), league_id),
     )
     .map_err(db_err)?;
     if let Some(items) = incoming.as_ref() {
-        tx.execute("DELETE FROM rivalries WHERE league_id = ?1", [league_id])
-            .map_err(db_err)?;
+        tx.execute(
+            "DELETE FROM rivalries WHERE league_id = $1",
+            params!(league_id),
+        )
+        .map_err(db_err)?;
         let timestamp = now_iso();
         for rivalry in items {
             tx.execute(
-                "INSERT INTO rivalries (id, league_id, team_id, opponent_team_id, games, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![new_id(), league_id, rivalry.team_id, rivalry.opponent_team_id, rivalry.games, timestamp],
+                "INSERT INTO rivalries (id, league_id, team_id, opponent_team_id, games, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+                params!(new_id(), league_id, rivalry.team_id, rivalry.opponent_team_id, i64::from(rivalry.games), timestamp),
             )
             .map_err(db_err)?;
         }
@@ -711,34 +761,37 @@ pub fn update_league(
     require_league(conn, league_id)
 }
 
-pub fn delete_league(
-    conn: &mut Connection,
-    _viewer_id: &str,
-    league_id: &str,
-) -> Result<(), ApiError> {
-    require_league(conn, league_id)?;
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(db_err)?;
+pub fn delete_league(conn: &mut Db, viewer_id: &str, league_id: &str) -> Result<(), ApiError> {
+    manage_league(conn, viewer_id, league_id)?;
+    let mut tx = conn.transaction().map_err(db_err)?;
     tx.execute(
-        "DELETE FROM schedule_games WHERE league_id = ?1",
-        [league_id],
+        "DELETE FROM schedule_games WHERE league_id = $1",
+        params!(league_id),
     )
     .map_err(db_err)?;
-    tx.execute("DELETE FROM schedules WHERE league_id = ?1", [league_id])
-        .map_err(db_err)?;
-    tx.execute("DELETE FROM rivalries WHERE league_id = ?1", [league_id])
-        .map_err(db_err)?;
     tx.execute(
-        "DELETE FROM lineups WHERE team_id IN (SELECT id FROM teams WHERE league_id = ?1)",
-        [league_id],
+        "DELETE FROM schedules WHERE league_id = $1",
+        params!(league_id),
     )
     .map_err(db_err)?;
-    tx.execute("DELETE FROM teams WHERE league_id = ?1", [league_id])
+    tx.execute(
+        "DELETE FROM rivalries WHERE league_id = $1",
+        params!(league_id),
+    )
+    .map_err(db_err)?;
+    tx.execute(
+        "DELETE FROM lineups WHERE team_id IN (SELECT id FROM teams WHERE league_id = $1)",
+        params!(league_id),
+    )
+    .map_err(db_err)?;
+    tx.execute("DELETE FROM teams WHERE league_id = $1", params!(league_id))
         .map_err(db_err)?;
-    tx.execute("DELETE FROM divisions WHERE league_id = ?1", [league_id])
-        .map_err(db_err)?;
-    tx.execute("DELETE FROM leagues WHERE id = ?1", [league_id])
+    tx.execute(
+        "DELETE FROM divisions WHERE league_id = $1",
+        params!(league_id),
+    )
+    .map_err(db_err)?;
+    tx.execute("DELETE FROM leagues WHERE id = $1", params!(league_id))
         .map_err(db_err)?;
     tx.commit().map_err(db_err)?;
     Ok(())
@@ -760,13 +813,10 @@ fn division_json(
     })
 }
 
-fn load_division(
-    conn: &Connection,
-    division_id: &str,
-) -> Result<Option<(Value, String)>, ApiError> {
+fn load_division(conn: &mut Db, division_id: &str) -> Result<Option<(Value, String)>, ApiError> {
     conn.query_row(
-        "SELECT id, league_id, name, created_at, updated_at FROM divisions WHERE id = ?1",
-        [division_id],
+        "SELECT id, league_id, name, created_at, updated_at FROM divisions WHERE id = $1",
+        params!(division_id),
         |row| {
             let league_id: String = row.get(1)?;
             Ok((
@@ -786,38 +836,34 @@ fn load_division(
 }
 
 pub fn list_divisions(
-    conn: &Connection,
-    _viewer_id: &str,
+    conn: &mut Db,
+    viewer_id: &str,
     league_id: &str,
 ) -> Result<Vec<Value>, ApiError> {
-    let league = require_league(conn, league_id)?;
+    let league = manage_league(conn, viewer_id, league_id)?;
     Ok(league["divisions"].as_array().cloned().unwrap_or_default())
 }
 
-pub fn get_division(
-    conn: &Connection,
-    _viewer_id: &str,
-    division_id: &str,
-) -> Result<Value, ApiError> {
+pub fn get_division(conn: &mut Db, viewer_id: &str, division_id: &str) -> Result<Value, ApiError> {
     let Some((division, league_id)) = load_division(conn, division_id)? else {
         return Err(ApiError::not_found("That division is not in the office."));
     };
-    require_league(conn, &league_id)?;
+    manage_league(conn, viewer_id, &league_id)?;
     Ok(division)
 }
 
 pub fn create_division(
-    conn: &Connection,
-    _viewer_id: &str,
+    conn: &mut Db,
+    viewer_id: &str,
     league_id: &str,
     body: &Value,
 ) -> Result<Value, ApiError> {
-    require_league(conn, league_id)?;
+    manage_league(conn, viewer_id, league_id)?;
     let name = validate::required_text(object(body)?.get("name"), "Division name")?;
     if conn
         .query_row(
-            "SELECT id FROM divisions WHERE league_id = ?1 AND name = ?2",
-            params![league_id, name],
+            "SELECT id FROM divisions WHERE league_id = $1 AND name = $2",
+            params!(league_id, name),
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -831,28 +877,28 @@ pub fn create_division(
     let id = new_id();
     let timestamp = now_iso();
     conn.execute(
-        "INSERT INTO divisions (id, league_id, name, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-        params![id, league_id, name, timestamp, timestamp],
+        "INSERT INTO divisions (id, league_id, name, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)",
+        params!(id, league_id, name, timestamp, timestamp),
     )
     .map_err(db_err)?;
     Ok(load_division(conn, &id)?.unwrap().0)
 }
 
 pub fn update_division(
-    conn: &Connection,
-    _viewer_id: &str,
+    conn: &mut Db,
+    viewer_id: &str,
     division_id: &str,
     body: &Value,
 ) -> Result<Value, ApiError> {
     let Some((_, league_id)) = load_division(conn, division_id)? else {
         return Err(ApiError::not_found("That division is not in the office."));
     };
-    require_league(conn, &league_id)?;
+    manage_league(conn, viewer_id, &league_id)?;
     let name = validate::required_text(object(body)?.get("name"), "Division name")?;
     if conn
         .query_row(
-            "SELECT id FROM divisions WHERE league_id = ?1 AND name = ?2 AND id != ?3",
-            params![league_id, name, division_id],
+            "SELECT id FROM divisions WHERE league_id = $1 AND name = $2 AND id != $3",
+            params!(league_id, name, division_id),
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -864,25 +910,21 @@ pub fn update_division(
         ));
     }
     conn.execute(
-        "UPDATE divisions SET name = ?1, updated_at = ?2 WHERE id = ?3",
-        params![name, now_iso(), division_id],
+        "UPDATE divisions SET name = $1, updated_at = $2 WHERE id = $3",
+        params!(name, now_iso(), division_id),
     )
     .map_err(db_err)?;
     Ok(load_division(conn, division_id)?.unwrap().0)
 }
 
-pub fn delete_division(
-    conn: &Connection,
-    _viewer_id: &str,
-    division_id: &str,
-) -> Result<(), ApiError> {
+pub fn delete_division(conn: &mut Db, viewer_id: &str, division_id: &str) -> Result<(), ApiError> {
     let Some((_, league_id)) = load_division(conn, division_id)? else {
         return Err(ApiError::not_found("That division is not in the office."));
     };
-    require_league(conn, &league_id)?;
+    manage_league(conn, viewer_id, &league_id)?;
     let teams = count(
         conn,
-        "SELECT COUNT(*) FROM teams WHERE division_id = ?1",
+        "SELECT COUNT(*) FROM teams WHERE division_id = $1",
         division_id,
     )?;
     if teams > 0 {
@@ -890,7 +932,7 @@ pub fn delete_division(
             "Move every team out of this division before deleting it. Deleting the league removes the division with the teams.",
         ));
     }
-    conn.execute("DELETE FROM divisions WHERE id = ?1", [division_id])
+    conn.execute("DELETE FROM divisions WHERE id = $1", params!(division_id))
         .map_err(db_err)?;
     Ok(())
 }
@@ -906,7 +948,7 @@ const TEAM_SQL: &str = "
     JOIN owners o ON o.id = t.owner_id
 ";
 
-fn map_team(row: &rusqlite::Row) -> rusqlite::Result<Value> {
+fn map_team(row: &crate::db::Row) -> Result<Value, postgres::Error> {
     Ok(json!({
         "id": row.get::<_, String>(0)?,
         "leagueId": row.get::<_, String>(1)?,
@@ -927,61 +969,83 @@ fn map_team(row: &rusqlite::Row) -> rusqlite::Result<Value> {
 
 struct TeamAccess {
     team: Value,
+    created_by: String,
 }
 
-fn load_team(conn: &Connection, team_id: &str) -> Result<Option<TeamAccess>, ApiError> {
-    conn.query_row(&format!("{TEAM_SQL} WHERE t.id = ?1"), [team_id], |row| {
-        Ok(TeamAccess {
-            team: map_team(row)?,
-        })
-    })
+fn load_team(conn: &mut Db, team_id: &str) -> Result<Option<TeamAccess>, ApiError> {
+    conn.query_row(
+        &format!("{TEAM_SQL} WHERE t.id = $1"),
+        params!(team_id),
+        |row| {
+            Ok(TeamAccess {
+                created_by: row.get(4)?,
+                team: map_team(row)?,
+            })
+        },
+    )
     .optional()
     .map_err(db_err)
 }
 
-fn visible(_access: &TeamAccess, _viewer_id: &str) -> bool {
-    true
+fn can_see_team(conn: &mut Db, access: &TeamAccess, viewer_id: &str) -> Result<bool, ApiError> {
+    Ok(is_admin(conn, viewer_id)?
+        || access.created_by == viewer_id
+        || access.team["ownerId"].as_str() == Some(viewer_id))
+}
+
+fn can_edit_lineup(conn: &mut Db, access: &TeamAccess, viewer_id: &str) -> Result<bool, ApiError> {
+    Ok(is_admin(conn, viewer_id)? || access.team["ownerId"].as_str() == Some(viewer_id))
 }
 
 pub fn list_league_teams(
-    conn: &Connection,
-    _viewer_id: &str,
+    conn: &mut Db,
+    viewer_id: &str,
     league_id: &str,
 ) -> Result<Vec<Value>, ApiError> {
-    require_league(conn, league_id)?;
+    manage_league(conn, viewer_id, league_id)?;
     let mut stmt = conn
         .prepare(&format!(
-            "{TEAM_SQL} WHERE t.league_id = ?1 ORDER BY t.name"
+            "{TEAM_SQL} WHERE t.league_id = $1 ORDER BY t.name"
         ))
         .map_err(db_err)?;
-    let rows = stmt.query_map([league_id], map_team).map_err(db_err)?;
+    let rows = stmt
+        .query_map(params!(league_id), map_team)
+        .map_err(db_err)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(db_err)
 }
 
 pub fn list_controlled(
-    conn: &Connection,
+    conn: &mut Db,
     viewer_id: &str,
 ) -> Result<(Vec<Value>, Vec<Value>), ApiError> {
+    let admin = is_admin(conn, viewer_id)?;
     let teams = {
-        let mut stmt = conn
-            .prepare(&format!("{TEAM_SQL} ORDER BY l.name, t.name"))
-            .map_err(db_err)?;
-        let mapped = stmt.query_map([], map_team).map_err(db_err)?;
+        let mut stmt = if admin {
+            conn.prepare(&format!("{TEAM_SQL} ORDER BY l.name, t.name"))
+                .map_err(db_err)?
+        } else {
+            conn.prepare(&format!(
+                "{TEAM_SQL} WHERE t.owner_id = $1 ORDER BY l.name, t.name"
+            ))
+            .map_err(db_err)?
+        };
+        let mapped = if admin {
+            stmt.query_map(params!(), map_team).map_err(db_err)?
+        } else {
+            stmt.query_map(params!(viewer_id), map_team)
+                .map_err(db_err)?
+        };
         mapped.collect::<Result<Vec<_>, _>>().map_err(db_err)?
     };
     let leagues = list_leagues(conn, viewer_id)?;
     Ok((teams, leagues))
 }
 
-fn division_in_league(
-    conn: &Connection,
-    league_id: &str,
-    division_id: &str,
-) -> Result<(), ApiError> {
+fn division_in_league(conn: &mut Db, league_id: &str, division_id: &str) -> Result<(), ApiError> {
     let found = conn
         .query_row(
-            "SELECT id FROM divisions WHERE id = ?1 AND league_id = ?2",
-            params![division_id, league_id],
+            "SELECT id FROM divisions WHERE id = $1 AND league_id = $2",
+            params!(division_id, league_id),
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -993,12 +1057,12 @@ fn division_in_league(
 }
 
 pub fn create_team(
-    conn: &mut Connection,
+    conn: &mut Db,
     viewer_id: &str,
     league_id: &str,
     body: &Value,
 ) -> Result<(Value, i64, bool, String), ApiError> {
-    require_league(conn, league_id)?;
+    manage_league(conn, viewer_id, league_id)?;
     let record = object(body)?;
     let name = validate::required_text(record.get("name"), "Team name")?;
     let home_park = validate::required_text(record.get("homePark"), "Home park")?;
@@ -1010,8 +1074,8 @@ pub fn create_team(
         .trim();
     let owner_email = if supplied.is_empty() {
         conn.query_row(
-            "SELECT email FROM owners WHERE id = ?1",
-            [viewer_id],
+            "SELECT email FROM owners WHERE id = $1",
+            params!(viewer_id),
             |row| row.get::<_, String>(0),
         )
         .map_err(db_err)?
@@ -1021,8 +1085,8 @@ pub fn create_team(
     division_in_league(conn, league_id, &division_id)?;
     if conn
         .query_row(
-            "SELECT id FROM teams WHERE league_id = ?1 AND name = ?2",
-            params![league_id, name],
+            "SELECT id FROM teams WHERE league_id = $1 AND name = $2",
+            params!(league_id, name),
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -1036,13 +1100,11 @@ pub fn create_team(
     let owner = upsert_owner(conn, &owner_email)?;
     let id = new_id();
     let timestamp = now_iso();
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(db_err)?;
+    let mut tx = conn.transaction().map_err(db_err)?;
     let team_count: i64 = tx
         .query_row(
-            "SELECT COUNT(*) FROM teams WHERE league_id = ?1",
-            [league_id],
+            "SELECT COUNT(*) FROM teams WHERE league_id = $1",
+            params!(league_id),
             |row| row.get(0),
         )
         .map_err(db_err)?;
@@ -1051,8 +1113,8 @@ pub fn create_team(
     }
     tx.execute(
         "INSERT INTO teams (id, league_id, division_id, owner_id, name, home_park, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![id, league_id, division_id, owner.id, name, home_park, timestamp, timestamp],
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+        params!(id, league_id, division_id, owner.id, name, home_park, timestamp, timestamp),
     )
     .map_err(db_err)?;
     tx.commit().map_err(db_err)?;
@@ -1066,11 +1128,11 @@ pub fn create_team(
     ))
 }
 
-pub fn get_team_page(conn: &Connection, viewer_id: &str, team_id: &str) -> Result<Value, ApiError> {
+pub fn get_team_page(conn: &mut Db, viewer_id: &str, team_id: &str) -> Result<Value, ApiError> {
     let Some(access) = load_team(conn, team_id)? else {
         return Err(ApiError::not_found("That team is not in the office."));
     };
-    if !visible(&access, viewer_id) {
+    if !can_see_team(conn, &access, viewer_id)? {
         return Err(ApiError::not_found("That team is not in the office."));
     }
     let league_id = access.team["leagueId"].as_str().unwrap_or("");
@@ -1080,8 +1142,8 @@ pub fn get_team_page(conn: &Connection, viewer_id: &str, team_id: &str) -> Resul
         "team": access.team,
         "divisions": league["divisions"].clone(),
         "lineups": lineups,
-        "viewerIsAdmin": true,
-        "canEditLineups": true,
+        "viewerIsAdmin": is_admin(conn, viewer_id)? || access.created_by == viewer_id,
+        "canEditLineups": can_edit_lineup(conn, &access, viewer_id)?,
         "teamCount": league["teamCount"].clone(),
         "inBounds": league["inBounds"].clone(),
         "boundLabel": league["boundLabel"].clone(),
@@ -1089,7 +1151,7 @@ pub fn get_team_page(conn: &Connection, viewer_id: &str, team_id: &str) -> Resul
 }
 
 pub fn update_team(
-    conn: &Connection,
+    conn: &mut Db,
     viewer_id: &str,
     team_id: &str,
     body: &Value,
@@ -1097,7 +1159,7 @@ pub fn update_team(
     let Some(access) = load_team(conn, team_id)? else {
         return Err(ApiError::not_found("That team is not in the office."));
     };
-    if !visible(&access, viewer_id) {
+    if !can_see_team(conn, &access, viewer_id)? {
         return Err(ApiError::not_found("That team is not in the office."));
     }
     let record = object(body)?;
@@ -1116,8 +1178,15 @@ pub fn update_team(
     } else {
         access.team["divisionId"].as_str().unwrap_or("").to_string()
     };
+    let league_admin = is_admin(conn, viewer_id)? || access.created_by == viewer_id;
     let owner_email = if record.contains_key("ownerEmail") {
-        validate::parse_email(record.get("ownerEmail"))?
+        let parsed = validate::parse_email(record.get("ownerEmail"))?;
+        if !league_admin && parsed != access.team["ownerEmail"].as_str().unwrap_or("") {
+            return Err(ApiError::forbidden(
+                "Only the league administrator can change who controls the team.",
+            ));
+        }
+        parsed
     } else {
         access.team["ownerEmail"].as_str().unwrap_or("").to_string()
     };
@@ -1125,8 +1194,8 @@ pub fn update_team(
     division_in_league(conn, &league_id, &division_id)?;
     if conn
         .query_row(
-            "SELECT id FROM teams WHERE league_id = ?1 AND name = ?2 AND id != ?3",
-            params![league_id, name, team_id],
+            "SELECT id FROM teams WHERE league_id = $1 AND name = $2 AND id != $3",
+            params!(league_id, name, team_id),
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -1139,28 +1208,26 @@ pub fn update_team(
     }
     let owner = upsert_owner(conn, &owner_email)?;
     conn.execute(
-        "UPDATE teams SET name = ?1, home_park = ?2, division_id = ?3, owner_id = ?4, updated_at = ?5 WHERE id = ?6",
-        params![name, home_park, division_id, owner.id, now_iso(), team_id],
+        "UPDATE teams SET name = $1, home_park = $2, division_id = $3, owner_id = $4, updated_at = $5 WHERE id = $6",
+        params!(name, home_park, division_id, owner.id, now_iso(), team_id),
     )
     .map_err(db_err)?;
     Ok(load_team(conn, team_id)?.unwrap().team)
 }
 
-pub fn delete_team(conn: &mut Connection, viewer_id: &str, team_id: &str) -> Result<(), ApiError> {
+pub fn delete_team(conn: &mut Db, viewer_id: &str, team_id: &str) -> Result<(), ApiError> {
     let Some(access) = load_team(conn, team_id)? else {
         return Err(ApiError::not_found("That team is not in the office."));
     };
-    if !visible(&access, viewer_id) {
+    if !can_see_team(conn, &access, viewer_id)? {
         return Err(ApiError::not_found("That team is not in the office."));
     }
     let league_id = access.team["leagueId"].as_str().unwrap_or("").to_string();
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(db_err)?;
+    let mut tx = conn.transaction().map_err(db_err)?;
     let team_count: i64 = tx
         .query_row(
-            "SELECT COUNT(*) FROM teams WHERE league_id = ?1",
-            [&league_id],
+            "SELECT COUNT(*) FROM teams WHERE league_id = $1",
+            params!(league_id),
             |row| row.get(0),
         )
         .map_err(db_err)?;
@@ -1170,20 +1237,23 @@ pub fn delete_team(conn: &mut Connection, viewer_id: &str, team_id: &str) -> Res
         ));
     }
     tx.execute(
-        "DELETE FROM schedule_games WHERE league_id = ?1",
-        [&league_id],
+        "DELETE FROM schedule_games WHERE league_id = $1",
+        params!(league_id),
     )
     .map_err(db_err)?;
-    tx.execute("DELETE FROM schedules WHERE league_id = ?1", [&league_id])
-        .map_err(db_err)?;
     tx.execute(
-        "DELETE FROM rivalries WHERE team_id = ?1 OR opponent_team_id = ?1",
-        [team_id],
+        "DELETE FROM schedules WHERE league_id = $1",
+        params!(league_id),
     )
     .map_err(db_err)?;
-    tx.execute("DELETE FROM lineups WHERE team_id = ?1", [team_id])
+    tx.execute(
+        "DELETE FROM rivalries WHERE team_id = $1 OR opponent_team_id = $1",
+        params!(team_id),
+    )
+    .map_err(db_err)?;
+    tx.execute("DELETE FROM lineups WHERE team_id = $1", params!(team_id))
         .map_err(db_err)?;
-    tx.execute("DELETE FROM teams WHERE id = ?1", [team_id])
+    tx.execute("DELETE FROM teams WHERE id = $1", params!(team_id))
         .map_err(db_err)?;
     tx.commit().map_err(db_err)?;
     Ok(())
@@ -1211,12 +1281,12 @@ fn lineup_value(
     }))
 }
 
-fn lineup_rows(conn: &Connection, team_id: &str) -> Result<Vec<Value>, ApiError> {
+fn lineup_rows(conn: &mut Db, team_id: &str) -> Result<Vec<Value>, ApiError> {
     let mut stmt = conn
-        .prepare("SELECT id, team_id, name, vs_lhp, vs_rhp, created_at, updated_at FROM lineups WHERE team_id = ?1 ORDER BY name")
+        .prepare("SELECT id, team_id, name, vs_lhp, vs_rhp, created_at, updated_at FROM lineups WHERE team_id = $1 ORDER BY name")
         .map_err(db_err)?;
     let rows = stmt
-        .query_map([team_id], |row| {
+        .query_map(params!(team_id), |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
@@ -1238,11 +1308,11 @@ fn lineup_rows(conn: &Connection, team_id: &str) -> Result<Vec<Value>, ApiError>
     Ok(lineups)
 }
 
-fn load_lineup(conn: &Connection, lineup_id: &str) -> Result<Option<Value>, ApiError> {
+fn load_lineup(conn: &mut Db, lineup_id: &str) -> Result<Option<Value>, ApiError> {
     let row = conn
         .query_row(
-            "SELECT id, team_id, name, vs_lhp, vs_rhp, created_at, updated_at FROM lineups WHERE id = ?1",
-            [lineup_id],
+            "SELECT id, team_id, name, vs_lhp, vs_rhp, created_at, updated_at FROM lineups WHERE id = $1",
+            params!(lineup_id),
             |row| {
                 Ok((
                     row.get::<_, String>(0)?,
@@ -1265,16 +1335,21 @@ fn load_lineup(conn: &Connection, lineup_id: &str) -> Result<Option<Value>, ApiE
     )?))
 }
 
-fn require_lineup_owner<'a>(
-    conn: &'a Connection,
+fn require_lineup_owner(
+    conn: &mut Db,
     viewer_id: &str,
     team_id: &str,
 ) -> Result<TeamAccess, ApiError> {
     let Some(access) = load_team(conn, team_id)? else {
         return Err(ApiError::not_found("That team is not in the office."));
     };
-    if !visible(&access, viewer_id) {
+    if !can_see_team(conn, &access, viewer_id)? {
         return Err(ApiError::not_found("That team is not in the office."));
+    }
+    if !can_edit_lineup(conn, &access, viewer_id)? {
+        return Err(ApiError::forbidden(
+            "Only the owner who controls this team can change its lineups.",
+        ));
     }
     Ok(access)
 }
@@ -1288,22 +1363,18 @@ fn lineup_fields(body: &Value) -> Result<(String, Value, Value), ApiError> {
     Ok((name, Value::Array(vs_lhp), Value::Array(vs_rhp)))
 }
 
-pub fn list_lineups(
-    conn: &Connection,
-    viewer_id: &str,
-    team_id: &str,
-) -> Result<Vec<Value>, ApiError> {
+pub fn list_lineups(conn: &mut Db, viewer_id: &str, team_id: &str) -> Result<Vec<Value>, ApiError> {
     let Some(access) = load_team(conn, team_id)? else {
         return Err(ApiError::not_found("That team is not in the office."));
     };
-    if !visible(&access, viewer_id) {
+    if !can_see_team(conn, &access, viewer_id)? {
         return Err(ApiError::not_found("That team is not in the office."));
     }
     lineup_rows(conn, team_id)
 }
 
 pub fn create_lineup(
-    conn: &Connection,
+    conn: &mut Db,
     viewer_id: &str,
     team_id: &str,
     body: &Value,
@@ -1312,8 +1383,8 @@ pub fn create_lineup(
     let (name, left, right) = lineup_fields(body)?;
     if conn
         .query_row(
-            "SELECT id FROM lineups WHERE team_id = ?1 AND name = ?2",
-            params![team_id, name],
+            "SELECT id FROM lineups WHERE team_id = $1 AND name = $2",
+            params!(team_id, name),
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -1327,18 +1398,14 @@ pub fn create_lineup(
     let id = new_id();
     let timestamp = now_iso();
     conn.execute(
-        "INSERT INTO lineups (id, team_id, name, vs_lhp, vs_rhp, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![id, team_id, name, left.to_string(), right.to_string(), timestamp, timestamp],
+        "INSERT INTO lineups (id, team_id, name, vs_lhp, vs_rhp, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        params!(id, team_id, name, left.to_string(), right.to_string(), timestamp, timestamp),
     )
     .map_err(db_err)?;
     Ok(load_lineup(conn, &id)?.unwrap())
 }
 
-pub fn get_lineup_page(
-    conn: &Connection,
-    viewer_id: &str,
-    lineup_id: &str,
-) -> Result<Value, ApiError> {
+pub fn get_lineup_page(conn: &mut Db, viewer_id: &str, lineup_id: &str) -> Result<Value, ApiError> {
     let Some(lineup) = load_lineup(conn, lineup_id)? else {
         return Err(ApiError::not_found("That lineup is not in the office."));
     };
@@ -1346,18 +1413,18 @@ pub fn get_lineup_page(
     let Some(access) = load_team(conn, team_id)? else {
         return Err(ApiError::not_found("That lineup is not in the office."));
     };
-    if !visible(&access, viewer_id) {
+    if !can_see_team(conn, &access, viewer_id)? {
         return Err(ApiError::not_found("That lineup is not in the office."));
     }
     Ok(json!({
         "lineup": lineup,
         "team": access.team,
-        "canEditLineups": true,
+        "canEditLineups": can_edit_lineup(conn, &access, viewer_id)?,
     }))
 }
 
 pub fn update_lineup(
-    conn: &Connection,
+    conn: &mut Db,
     viewer_id: &str,
     lineup_id: &str,
     body: &Value,
@@ -1370,8 +1437,8 @@ pub fn update_lineup(
     let (name, left, right) = lineup_fields(body)?;
     if conn
         .query_row(
-            "SELECT id FROM lineups WHERE team_id = ?1 AND name = ?2 AND id != ?3",
-            params![team_id, name, lineup_id],
+            "SELECT id FROM lineups WHERE team_id = $1 AND name = $2 AND id != $3",
+            params!(team_id, name, lineup_id),
             |row| row.get::<_, String>(0),
         )
         .optional()
@@ -1383,26 +1450,26 @@ pub fn update_lineup(
         ));
     }
     conn.execute(
-        "UPDATE lineups SET name = ?1, vs_lhp = ?2, vs_rhp = ?3, updated_at = ?4 WHERE id = ?5",
-        params![
+        "UPDATE lineups SET name = $1, vs_lhp = $2, vs_rhp = $3, updated_at = $4 WHERE id = $5",
+        params!(
             name,
             left.to_string(),
             right.to_string(),
             now_iso(),
             lineup_id
-        ],
+        ),
     )
     .map_err(db_err)?;
     Ok(load_lineup(conn, lineup_id)?.unwrap())
 }
 
-pub fn delete_lineup(conn: &Connection, viewer_id: &str, lineup_id: &str) -> Result<(), ApiError> {
+pub fn delete_lineup(conn: &mut Db, viewer_id: &str, lineup_id: &str) -> Result<(), ApiError> {
     let Some(existing) = load_lineup(conn, lineup_id)? else {
         return Err(ApiError::not_found("That lineup is not in the office."));
     };
     let team_id = existing["teamId"].as_str().unwrap_or("");
     require_lineup_owner(conn, viewer_id, team_id)?;
-    conn.execute("DELETE FROM lineups WHERE id = ?1", [lineup_id])
+    conn.execute("DELETE FROM lineups WHERE id = $1", params!(lineup_id))
         .map_err(db_err)?;
     Ok(())
 }
@@ -1436,12 +1503,12 @@ fn configuration_snapshot(
     .to_string()
 }
 
-pub fn read_schedule(conn: &Connection, league_id: &str) -> Result<Value, ApiError> {
-    let league = require_league(conn, league_id)?;
+pub fn read_schedule(conn: &mut Db, viewer_id: &str, league_id: &str) -> Result<Value, ApiError> {
+    let league = manage_league(conn, viewer_id, league_id)?;
     let header = conn
         .query_row(
-            "SELECT built_at, snapshot FROM schedules WHERE league_id = ?1",
-            [league_id],
+            "SELECT built_at, snapshot FROM schedules WHERE league_id = $1",
+            params!(league_id),
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         )
         .optional()
@@ -1464,12 +1531,12 @@ pub fn read_schedule(conn: &Connection, league_id: &str) -> Result<Value, ApiErr
              FROM schedule_games g
              JOIN teams th ON th.id = g.home_team_id
              JOIN teams ta ON ta.id = g.away_team_id
-             WHERE g.league_id = ?1
+             WHERE g.league_id = $1
              ORDER BY g.round, th.name, ta.name",
         )
         .map_err(db_err)?;
     let rows = stmt
-        .query_map([league_id], |row| {
+        .query_map(params!(league_id), |row| {
             Ok(json!({
                 "id": row.get::<_, String>(0)?,
                 "round": row.get::<_, i64>(1)?,
@@ -1501,7 +1568,7 @@ pub fn read_schedule(conn: &Connection, league_id: &str) -> Result<Value, ApiErr
     }))
 }
 
-fn current_snapshot(conn: &Connection, league_id: &str) -> Result<Option<String>, ApiError> {
+fn current_snapshot(conn: &mut Db, league_id: &str) -> Result<Option<String>, ApiError> {
     let league = require_league(conn, league_id)?;
     let Some(league_type) = league["leagueType"].as_str() else {
         return Ok(None);
@@ -1527,8 +1594,8 @@ fn current_snapshot(conn: &Connection, league_id: &str) -> Result<Option<String>
     )))
 }
 
-pub fn build_schedule(conn: &mut Connection, league_id: &str) -> Result<Value, ApiError> {
-    let league = require_league(conn, league_id)?;
+pub fn build_schedule(conn: &mut Db, viewer_id: &str, league_id: &str) -> Result<Value, ApiError> {
+    let league = manage_league(conn, viewer_id, league_id)?;
     let Some(league_type) = league["leagueType"].as_str().map(str::to_string) else {
         return Err(ApiError::bad(
             "Choose a league type before building a schedule.",
@@ -1593,51 +1660,49 @@ pub fn build_schedule(conn: &mut Connection, league_id: &str) -> Result<Value, A
         &stored,
     );
     let timestamp = now_iso();
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(db_err)?;
+    let mut tx = conn.transaction().map_err(db_err)?;
     tx.execute(
-        "DELETE FROM schedule_games WHERE league_id = ?1",
-        [league_id],
+        "DELETE FROM schedule_games WHERE league_id = $1",
+        params!(league_id),
     )
     .map_err(db_err)?;
-    tx.execute("DELETE FROM schedules WHERE league_id = ?1", [league_id])
-        .map_err(db_err)?;
+    tx.execute(
+        "DELETE FROM schedules WHERE league_id = $1",
+        params!(league_id),
+    )
+    .map_err(db_err)?;
     for game in &planned {
+        let game_id = new_id();
+        let round = i64::from(game.round);
+        let home = team_ids[game.home].clone();
+        let away = team_ids[game.away].clone();
+        let same_division = if game.same_division { 1_i64 } else { 0_i64 };
+        let rivalry_game = if game.rivalry { 1_i64 } else { 0_i64 };
         tx.execute(
             "INSERT INTO schedule_games (id, league_id, round, home_team_id, away_team_id, same_division, rivalry, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![
-                new_id(),
-                league_id,
-                game.round,
-                team_ids[game.home],
-                team_ids[game.away],
-                if game.same_division { 1 } else { 0 },
-                if game.rivalry { 1 } else { 0 },
-                timestamp,
-            ],
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            params!(game_id, league_id, round, home, away, same_division, rivalry_game, timestamp),
         )
         .map_err(db_err)?;
     }
     tx.execute(
-        "INSERT INTO schedules (league_id, built_at, snapshot) VALUES (?1, ?2, ?3)",
-        params![league_id, timestamp, snapshot],
+        "INSERT INTO schedules (league_id, built_at, snapshot) VALUES ($1, $2, $3)",
+        params!(league_id, timestamp, snapshot),
     )
     .map_err(db_err)?;
     tx.commit().map_err(db_err)?;
-    read_schedule(conn, league_id)
+    read_schedule(conn, viewer_id, league_id)
 }
 
-pub fn session_counts(conn: &Connection, owner_id: &str) -> Result<(i64, i64), ApiError> {
+pub fn session_counts(conn: &mut Db, owner_id: &str) -> Result<(i64, i64), ApiError> {
     let leagues = count(
         conn,
-        "SELECT COUNT(*) FROM leagues WHERE created_by = ?1",
+        "SELECT COUNT(*) FROM leagues WHERE created_by = $1",
         owner_id,
     )?;
     let teams = count(
         conn,
-        "SELECT COUNT(*) FROM teams WHERE owner_id = ?1",
+        "SELECT COUNT(*) FROM teams WHERE owner_id = $1",
         owner_id,
     )?;
     Ok((leagues, teams))
@@ -1647,23 +1712,20 @@ pub fn session_counts(conn: &Connection, owner_id: &str) -> Result<(i64, i64), A
 mod tests {
     use super::*;
 
-    fn scratch() -> (std::path::PathBuf, Connection) {
-        let path = std::env::temp_dir().join(format!("league-schedule-{}.sqlite", new_id()));
-        let _ = std::fs::remove_file(&path);
-        let conn = open(&path).expect("open");
-        (path, conn)
+    fn scratch() -> Db {
+        open_test().expect("open postgres")
     }
 
-    fn owner_id(conn: &Connection) -> String {
-        office_owner(conn).unwrap().id
+    fn owner_id(conn: &mut Db) -> String {
+        upsert_owner(conn, "prover@league-office.test").unwrap().id
     }
 
     #[test]
     fn build_reads_back_and_a_failed_build_keeps_the_previous_one() {
-        let (path, mut conn) = scratch();
-        let actor = owner_id(&conn);
+        let mut conn = scratch();
+        let actor = owner_id(&mut conn);
         let league = create_league(
-            &conn,
+            &mut conn,
             &actor,
             &json!({
                 "name": "Harbor ULMG",
@@ -1677,17 +1739,17 @@ mod tests {
         assert_eq!(league["leagueType"], "ulmg");
         assert_eq!(league["lineupLock"], "game");
         let league_id = league["id"].as_str().unwrap().to_string();
-        let east = create_division(&conn, &actor, &league_id, &json!({"name": "East"})).unwrap()
-            ["id"]
+        let east = create_division(&mut conn, &actor, &league_id, &json!({"name": "East"}))
+            .unwrap()["id"]
             .as_str()
             .unwrap()
             .to_string();
-        let west = create_division(&conn, &actor, &league_id, &json!({"name": "West"})).unwrap()
-            ["id"]
+        let west = create_division(&mut conn, &actor, &league_id, &json!({"name": "West"}))
+            .unwrap()["id"]
             .as_str()
             .unwrap()
             .to_string();
-        let add = |conn: &mut Connection, division: &str, name: &str| -> String {
+        let add = |conn: &mut Db, division: &str, name: &str| -> String {
             create_team(
                 conn,
                 &actor,
@@ -1716,7 +1778,7 @@ mod tests {
             }),
         )
         .unwrap();
-        let first = build_schedule(&mut conn, &league_id).unwrap();
+        let first = build_schedule(&mut conn, &actor, &league_id).unwrap();
         assert_eq!(first["games"].as_array().unwrap().len(), 12);
         assert_eq!(first["matchesConfiguration"], true);
         let first_ids: Vec<String> = first["games"]
@@ -1725,9 +1787,9 @@ mod tests {
             .iter()
             .map(|game| game["id"].as_str().unwrap().to_string())
             .collect();
-        let read = read_schedule(&conn, &league_id).unwrap();
+        let read = read_schedule(&mut conn, &actor, &league_id).unwrap();
         assert_eq!(read["games"].as_array().unwrap().len(), 12);
-        let second = build_schedule(&mut conn, &league_id).unwrap();
+        let second = build_schedule(&mut conn, &actor, &league_id).unwrap();
         let second_ids: Vec<String> = second["games"]
             .as_array()
             .unwrap()
@@ -1737,7 +1799,7 @@ mod tests {
         assert!(second_ids.iter().all(|id| !first_ids.contains(id)));
 
         let narrow = create_league(
-            &conn,
+            &mut conn,
             &actor,
             &json!({
                 "name": "Narrow",
@@ -1750,7 +1812,7 @@ mod tests {
         .unwrap();
         assert_eq!(narrow["lineupLock"], "week");
         let narrow_id = narrow["id"].as_str().unwrap();
-        let only = create_division(&conn, &actor, narrow_id, &json!({"name": "Only"})).unwrap()
+        let only = create_division(&mut conn, &actor, narrow_id, &json!({"name": "Only"})).unwrap()
             ["id"]
             .as_str()
             .unwrap()
@@ -1764,7 +1826,7 @@ mod tests {
             )
             .unwrap();
         }
-        let built = build_schedule(&mut conn, narrow_id).unwrap();
+        let built = build_schedule(&mut conn, &actor, narrow_id).unwrap();
         assert_eq!(built["games"].as_array().unwrap().len(), 3);
         let kept: Vec<String> = built["games"]
             .as_array()
@@ -1779,13 +1841,13 @@ mod tests {
             &json!({"seasonLength": 1, "divisionGames": 1, "outsideGames": 0}),
         )
         .unwrap();
-        let error = build_schedule(&mut conn, narrow_id).unwrap_err();
+        let error = build_schedule(&mut conn, &actor, narrow_id).unwrap_err();
         assert!(
             error.message.contains("would not pair"),
             "{}",
             error.message
         );
-        let still = read_schedule(&conn, narrow_id).unwrap();
+        let still = read_schedule(&mut conn, &actor, narrow_id).unwrap();
         let still_ids: Vec<String> = still["games"]
             .as_array()
             .unwrap()
@@ -1794,15 +1856,14 @@ mod tests {
             .collect();
         assert_eq!(still_ids, kept);
         assert_eq!(still["matchesConfiguration"], false);
-        let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn counts_that_do_not_add_up_are_rejected() {
-        let (path, conn) = scratch();
-        let actor = owner_id(&conn);
+        let mut conn = scratch();
+        let actor = owner_id(&mut conn);
         let error = create_league(
-            &conn,
+            &mut conn,
             &actor,
             &json!({
                 "name": "Short",
@@ -1814,6 +1875,5 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.message.contains("add up"), "{}", error.message);
-        let _ = std::fs::remove_file(path);
     }
 }

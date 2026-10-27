@@ -151,6 +151,25 @@ pub fn parse_rivalries(value: &Value) -> Result<Vec<RivalryInput>, ApiError> {
     Ok(pairs)
 }
 
+pub fn parse_phone(value: &str) -> Result<String, ApiError> {
+    let trimmed = value.trim();
+    let digits: String = trimmed
+        .chars()
+        .filter(|char| char.is_ascii_digit())
+        .collect();
+    let ok = trimmed.starts_with('+')
+        && trimmed
+            .chars()
+            .all(|char| char == '+' || char.is_ascii_digit())
+        && (8..=15).contains(&digits.len());
+    if !ok {
+        return Err(ApiError::bad(
+            "Enter the phone number with the country code, starting with +.",
+        ));
+    }
+    Ok(format!("+{digits}"))
+}
+
 pub fn parse_lock(value: Option<&Value>) -> Result<String, ApiError> {
     let Some(value) = value.and_then(Value::as_str) else {
         return Err(ApiError::bad(

@@ -2,7 +2,7 @@
 name = "admin-api"
 version = "0.1.0"
 edition = "2021"
-description = "League office API. SQLite stays behind this process."
+description = "League office API. Postgres stays behind this process."
 license = "MIT"
 
 [dependencies]
@@ -10,9 +10,13 @@ axum = "0.7.9"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 http-body-util = "0.1"
 hyper-util = "=0.1.20"
+openssl = "0.10.66"
+postgres = "0.19.10"
+postgres-openssl = "0.5.0"
+postgres-protocol = "=0.6.8"
 rand = "0.8"
-rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "=1.53.2", features = ["macros", "net", "rt-multi-thread"] }
+tokio-util = "=0.7.12"
 tower-http = { version = "0.6", features = ["cors"] }
