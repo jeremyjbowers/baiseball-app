@@ -6,7 +6,7 @@
   <div class="card stack">
     <div>
       <h1>Privacy Policy</h1>
-      <p class="muted">Last updated October 27, 2026. This Privacy Policy describes how League office / bAIseball (“we,” “us”) collects, uses, and shares information when you use baiseball.app and related league office services.</p>
+      <p class="muted">Last updated October 27, 2026. This Privacy Policy describes how League office / bAIseball (“we,” “us”) collects, uses, and shares information when you use league-office.app and related league office services.</p>
     </div>
     <h2>1. Information we collect</h2>
     <p>Email address; optional mobile phone number; SMS opt-in consent timestamp; sign-in and session tokens; and league, team, lineup, rivalry, and schedule records you create.</p>

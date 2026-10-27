@@ -4,9 +4,9 @@ alerts:
   - rule: DEPLOYMENT_FAILED
   - rule: DOMAIN_FAILED
 domains:
-  - domain: baiseball.app
+  - domain: league-office.app
     type: PRIMARY
-  - domain: api.baiseball.app
+  - domain: api.league-office.app
     type: ALIAS
 ingress:
   rules:
@@ -14,14 +14,14 @@ ingress:
         name: api
       match:
         authority:
-          exact: api.baiseball.app
+          exact: api.league-office.app
         path:
           prefix: /
     - component:
         name: web
       match:
         authority:
-          exact: baiseball.app
+          exact: league-office.app
         path:
           prefix: /
     - component:
@@ -54,7 +54,7 @@ services:
         value: ${db.CA_CERT}
       - key: PUBLIC_APP_URL
         scope: RUN_TIME
-        value: https://baiseball.app
+        value: https://league-office.app
       - key: OWNER_BOOTSTRAP_EMAIL
         scope: RUN_TIME
         value: jeremyjbowers@gmail.com
@@ -74,7 +74,7 @@ static_sites:
     envs:
       - key: VITE_API_URL
         scope: BUILD_TIME
-        value: https://api.baiseball.app
+        value: https://api.league-office.app
 databases:
   - name: db
     engine: PG

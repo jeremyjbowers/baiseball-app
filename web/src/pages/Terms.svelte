@@ -6,7 +6,7 @@
   <div class="card stack">
     <div>
       <h1>Terms of Service</h1>
-      <p class="muted">Last updated October 27, 2026. These terms govern use of League office, the administration site for bAIseball leagues operated at baiseball.app.</p>
+      <p class="muted">Last updated October 27, 2026. These terms govern use of League office, the administration site for bAIseball leagues operated at league-office.app.</p>
     </div>
     <h2>1. The service</h2>
     <p>League office lets league owners and club operators sign in, manage leagues, teams, lineups, and schedules, and receive account-related notices. By creating an account or using the service, you agree to these Terms of Service and the <a class="link" href={PRIVACY_URL}>Privacy Policy</a>.</p>

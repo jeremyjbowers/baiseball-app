@@ -1,6 +1,6 @@
 # baiseball-app
 
-the bAIseball application. The public site is [baiseball.app](https://baiseball.app).
+the bAIseball application. The public site is [league-office.app](https://league-office.app).
 
 # Baseball engine
 
