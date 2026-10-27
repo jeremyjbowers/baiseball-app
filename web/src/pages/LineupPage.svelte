@@ -34,10 +34,6 @@
         readOnly = !payload.canEditLineups;
       } else {
         const payload = await api(`/teams/${teamId}`);
-        if (!payload.canEditLineups) {
-          error = "Only the owner who controls this team can write its lineups.";
-          return;
-        }
         teamName = payload.team.name;
         leagueName = payload.team.leagueName;
         lockText = lockDetail(payload.team.lineupLock);
@@ -83,7 +79,7 @@
     <h1>{readOnly ? name || "Lineup" : lineupId ? "Edit lineup" : "New lineup"}</h1>
     <div class="alert">
       <strong>When this lineup locks</strong>
-      <p class="muted">{lockText} No schedule is running in this office, so nothing in progress holds a lineup back. The saved cards are the ones on file.</p>
+      <p class="muted">{lockText} This office stores the card. It does not yet hold a change until the next game or week.</p>
     </div>
     {#if formError}<div class="alert error" role="alert"><strong>Could not save</strong><p>{formError}</p></div>{/if}
     <Field id="lineup-name" label="Lineup name" hint="Nine batters. The designated hitter is in the order, and pitchers do not hit. This is the MLB card only.">

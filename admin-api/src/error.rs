@@ -25,6 +25,7 @@ impl ApiError {
         Self::new(StatusCode::UNAUTHORIZED, "Sign in to continue.")
     }
 
+    #[allow(dead_code)]
     pub fn forbidden(message: impl Into<String>) -> Self {
         Self::new(StatusCode::FORBIDDEN, message)
     }

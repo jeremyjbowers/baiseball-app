@@ -69,7 +69,7 @@
 {:else}
   <div class="stack">
     <div class="row">
-      <a class="link" href="/teams">Teams you control</a>
+      <a class="link" href="/teams">Teams</a>
       {#if data.viewerIsAdmin}<a class="link" href="/leagues/{data.team.leagueId}">{data.team.leagueName}</a>
       {:else}<span>{data.team.leagueName}</span>{/if}
     </div>
@@ -87,7 +87,7 @@
         </select>
       </Field>
       <Field id="edit-home-park" label="Home park" hint="The park this team plays in at home."><input id="edit-home-park" bind:value={homePark} /></Field>
-      <Field id="edit-owner-email" label="Owner email" hint={data.viewerIsAdmin ? "This owner controls the team and writes its lineups." : "Only the league administrator can change who controls the team."}>
+      <Field id="edit-owner-email" label="Owner email" hint="Stored for later, when sign-in is on. This office can still edit the lineup.">
         <input id="edit-owner-email" type="email" bind:value={ownerEmail} disabled={!data.viewerIsAdmin} />
       </Field>
       <button type="submit" disabled={pending}>{pending ? "Saving the team…" : "Save team"}</button>
@@ -97,10 +97,10 @@
       <div class="spread">
         <div>
           <h2>Lineups</h2>
-          <p class="muted">Each lineup is the MLB card only. Store one card versus left-handed pitching and one card versus right-handed pitching.</p>
+          <p class="muted">Each lineup is the MLB card only. Store one card versus left-handed pitching and one card versus right-handed pitching. Sign-in is later, so lineups are open.</p>
         </div>
         {#if data.canEditLineups}<a class="button" href="/teams/{data.team.id}/lineups/new">Add a lineup</a>
-        {:else}<p class="muted">Lineups are written by the owner who controls this team.</p>{/if}
+        {/if}
       </div>
       {#if data.lineups.length === 0}
         <div class="empty stack">

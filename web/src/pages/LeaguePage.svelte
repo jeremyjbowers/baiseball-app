@@ -1,11 +1,11 @@
 <script>
   import { onMount } from "svelte";
   import { api } from "../lib/api.js";
-  import { LOCKS, lockDetail } from "../lib/copy.js";
+  import { countNote, typeDetail } from "../lib/copy.js";
   import { navigate } from "../lib/nav.js";
-  import { getSession } from "../lib/session.js";
   import Confirm from "../lib/Confirm.svelte";
   import Field from "../lib/Field.svelte";
+  import LeagueFields from "../lib/LeagueFields.svelte";
 
   let { leagueId } = $props();
   let league = $state(null);
@@ -14,15 +14,22 @@
   let error = $state("");
   let formError = $state("");
   let name = $state("");
-  let lineupLock = $state("");
+  let leagueType = $state("");
+  let seasonLength = $state("");
+  let divisionGames = $state("");
+  let outsideGames = $state("");
+  let rivalries = $state([]);
+  let rivalA = $state("");
+  let rivalB = $state("");
+  let rivalGames = $state("");
   let divisionName = $state("");
   let divisionDrafts = $state({});
   let teamName = $state("");
   let divisionId = $state("");
   let homePark = $state("");
-  let ownerEmail = $state(getSession()?.email ?? "");
+  let ownerEmail = $state("");
   let pending = $state("");
-  let detail = $derived(LOCKS.find((lock) => lock.value === lineupLock)?.detail ?? "");
+  let note = $derived(countNote(seasonLength, divisionGames, outsideGames));
 
   function apply(payload, quiet) {
     league = payload.league;
@@ -31,9 +38,21 @@
     if (!payload.league.divisions.some((division) => division.id === divisionId)) {
       divisionId = payload.league.divisions[0]?.id ?? "";
     }
+    if (!teams.some((team) => team.id === rivalA)) rivalA = teams[0]?.id ?? "";
+    if (!teams.some((team) => team.id === rivalB)) rivalB = teams[1]?.id ?? teams[0]?.id ?? "";
     if (!quiet) {
       name = payload.league.name;
-      lineupLock = payload.league.lineupLock;
+      leagueType = payload.league.leagueType ?? "ulmg";
+      seasonLength = payload.league.seasonLength == null ? "" : String(payload.league.seasonLength);
+      divisionGames = payload.league.divisionGames == null ? "" : String(payload.league.divisionGames);
+      outsideGames = payload.league.outsideGames == null ? "" : String(payload.league.outsideGames);
+      rivalries = (payload.league.rivalries ?? []).map((rivalry) => ({
+        teamId: rivalry.teamId,
+        opponentTeamId: rivalry.opponentTeamId,
+        games: rivalry.games,
+        teamName: rivalry.teamName,
+        opponentTeamName: rivalry.opponentTeamName,
+      }));
     }
   }
 
@@ -66,6 +85,58 @@
     }
   }
 
+  function settingsBody() {
+    if (!note.ok) throw new Error(note.text);
+    return {
+      name,
+      leagueType,
+      seasonLength: note.season,
+      divisionGames: note.inside,
+      outsideGames: note.outside,
+      rivalries: rivalries.map((rivalry) => ({
+        teamId: rivalry.teamId,
+        opponentTeamId: rivalry.opponentTeamId,
+        games: Number(rivalry.games),
+      })),
+    };
+  }
+
+  function teamNameOf(id) {
+    return teams.find((team) => team.id === id)?.name ?? "Team";
+  }
+
+  function addRivalry() {
+    formError = "";
+    if (!rivalA || !rivalB) {
+      formError = "Choose both rivalry opponents.";
+      return;
+    }
+    if (rivalA === rivalB) {
+      formError = "A team cannot be its own rival.";
+      return;
+    }
+    if (!/^\d+$/.test(String(rivalGames).trim()) || Number(rivalGames) < 1) {
+      formError = "Say how many games the rivalry plays.";
+      return;
+    }
+    const key = [rivalA, rivalB].sort().join(":");
+    if (rivalries.some((rivalry) => [rivalry.teamId, rivalry.opponentTeamId].sort().join(":") === key)) {
+      formError = "Name each rivalry once.";
+      return;
+    }
+    rivalries = [
+      ...rivalries,
+      {
+        teamId: rivalA,
+        opponentTeamId: rivalB,
+        games: Number(rivalGames),
+        teamName: teamNameOf(rivalA),
+        opponentTeamName: teamNameOf(rivalB),
+      },
+    ];
+    rivalGames = "";
+  }
+
   onMount(() => load());
 </script>
 
@@ -79,26 +150,66 @@
 {:else}
   <div class="stack">
     <a class="link" href="/leagues">All leagues</a>
-    <h1>{league.name}</h1>
+    <div class="spread">
+      <h1>{league.name}</h1>
+      <a class="button secondary" href="/leagues/{league.id}/schedule">Schedule{league.scheduledGameCount ? ` · ${league.scheduledGameCount} games` : ""}</a>
+    </div>
     <p class:danger={!league.inBounds}>{league.boundLabel}</p>
-    <p class="muted">{lockDetail(league.lineupLock)}</p>
-    <p class="muted">Division size is not fixed. ULMG uses four divisions of four. NPL uses six divisions of four. 26 and 28 team counts are closed.</p>
+    <p class="muted">{typeDetail(league.leagueType)}</p>
+    <p class="muted">Division size is not fixed. ULMG is often 16 teams in four divisions. NPL is often 24 teams in six divisions. Those counts are examples. 26 and 28 team counts are closed.</p>
     {#if formError}<div class="alert error" role="alert"><strong>Could not save</strong><p>{formError}</p></div>{/if}
 
     <form class="card stack" onsubmit={(event) => { event.preventDefault(); run("league", async () => {
-      const payload = await api(`/leagues/${league.id}`, { method: "PATCH", body: JSON.stringify({ name, lineupLock }) });
-      league = { ...league, ...payload.league, divisions: league.divisions };
-      name = payload.league.name;
-      lineupLock = payload.league.lineupLock;
+      const payload = await api(`/leagues/${league.id}`, { method: "PATCH", body: JSON.stringify(settingsBody()) });
+      league = payload.league;
+      apply({ league: payload.league, teams }, false);
     }); }}>
       <h2>League settings</h2>
-      <Field id="league-name" label="League name"><input id="league-name" bind:value={name} /></Field>
-      <Field id="lineup-lock" label="Lineup lock" hint={detail}>
-        <select id="lineup-lock" bind:value={lineupLock}>
-          {#each LOCKS as lock (lock.value)}<option value={lock.value}>{lock.label}</option>{/each}
-        </select>
-      </Field>
-      <button type="submit" disabled={pending === "league"}>{pending === "league" ? "Saving the league…" : "Save league"}</button>
+      <LeagueFields bind:name bind:leagueType bind:seasonLength bind:divisionGames bind:outsideGames />
+
+      <div class="stack">
+        <h3>Rivalry opponents</h3>
+        <p class="muted">A rivalry is two teams and how many times they play. Those games count toward the inside total when they share a division, and toward the outside total when they do not. They are not extra games on top of the season.</p>
+        {#if rivalries.length === 0}
+          <p class="muted">No rivalry pairs yet.</p>
+        {/if}
+        {#each rivalries as rivalry, index (`${rivalry.teamId}-${rivalry.opponentTeamId}`)}
+          <div class="spread">
+            <p>{rivalry.teamName} and {rivalry.opponentTeamName}, {rivalry.games} games</p>
+            <button class="secondary" type="button" onclick={() => { rivalries = rivalries.filter((_, item) => item !== index); }}>Remove</button>
+          </div>
+        {/each}
+        {#if teams.length >= 2}
+          <div class="rivalry-form">
+            <Field id="rival-a" label="Team">
+              <select id="rival-a" bind:value={rivalA}>
+                {#each teams as team (team.id)}<option value={team.id}>{team.name}</option>{/each}
+              </select>
+            </Field>
+            <Field id="rival-b" label="Opponent">
+              <select id="rival-b" bind:value={rivalB}>
+                {#each teams as team (team.id)}<option value={team.id}>{team.name}</option>{/each}
+              </select>
+            </Field>
+            <Field id="rival-games" label="Games">
+              <input id="rival-games" inputmode="numeric" bind:value={rivalGames} />
+            </Field>
+            <button class="secondary" type="button" onclick={addRivalry}>Add rivalry</button>
+          </div>
+        {:else}
+          <p class="muted">Add at least two teams before naming a rivalry.</p>
+        {/if}
+      </div>
+
+      <div class="row">
+        <button type="submit" disabled={pending === "league" || !note.ok}>{pending === "league" ? "Saving the league…" : "Save league"}</button>
+        <button type="button" disabled={pending === "build" || !note.ok || teams.length < 2} onclick={() => run("build", async () => {
+          await api(`/leagues/${league.id}`, { method: "PATCH", body: JSON.stringify(settingsBody()) });
+          await api(`/leagues/${league.id}/schedule`, { method: "POST" });
+          navigate(`/leagues/${league.id}/schedule`);
+        })}>{pending === "build" ? "Building the schedule…" : "Build schedule"}</button>
+      </div>
+      {#if teams.length < 2}<p class="hint">Add at least two teams before building a schedule. Building again replaces the schedule on file.</p>{/if}
     </form>
 
     <section class="stack">
@@ -139,14 +250,14 @@
     <section class="stack">
       <h2>Teams</h2>
       {#if teams.length === 0}
-        <div class="empty"><h3>No teams yet</h3><p class="muted">A team has a name, a division, and a home park. The owner you assign controls the team and writes its lineups.</p></div>
+        <div class="empty"><h3>No teams yet</h3><p class="muted">A team has a name, a division, and a home park. The owner email is stored for later. Sign-in is not on, so this office can edit the lineup.</p></div>
       {/if}
       {#each teams as team (team.id)}
         <article class="card stack">
           <h3><a class="link" href="/teams/{team.id}">{team.name}</a></h3>
           <p>{team.divisionName}</p>
           <p>Home park: {team.homePark}</p>
-          <p>Controlled by {team.ownerEmail}</p>
+          <p>Owner email: {team.ownerEmail}</p>
           <p class="muted">{team.lineupCount} {team.lineupCount === 1 ? "lineup" : "lineups"}</p>
           <a class="button secondary" href="/teams/{team.id}">Open team</a>
         </article>
@@ -157,10 +268,12 @@
         <p class="muted">Add a division before adding a team.</p>
       {:else}
         <form class="panel stack" onsubmit={(event) => { event.preventDefault(); run("new-team", async () => {
-          await api(`/leagues/${league.id}/teams`, { method: "POST", body: JSON.stringify({ name: teamName, divisionId, homePark, ownerEmail }) });
+          const body = { name: teamName, divisionId, homePark };
+          if (ownerEmail.trim()) body.ownerEmail = ownerEmail.trim();
+          await api(`/leagues/${league.id}/teams`, { method: "POST", body: JSON.stringify(body) });
           teamName = "";
           homePark = "";
-          ownerEmail = getSession()?.email ?? "";
+          ownerEmail = "";
           await load(true);
         }); }}>
           <h3>Add a team</h3>
@@ -171,7 +284,7 @@
             </select>
           </Field>
           <Field id="home-park" label="Home park" hint="The park this team plays in at home."><input id="home-park" bind:value={homePark} /></Field>
-          <Field id="owner-email" label="Owner email" hint="This owner controls the team and writes its lineups. They sign in with this address.">
+          <Field id="owner-email" label="Owner email" hint="Optional. Stored for later, when sign-in is on. Blank leaves the team with the office.">
             <input id="owner-email" type="email" bind:value={ownerEmail} />
           </Field>
           <button type="submit" disabled={pending === "new-team"}>{pending === "new-team" ? "Adding the team…" : "Add team"}</button>
@@ -182,7 +295,7 @@
     <Confirm
       label="Delete league"
       title={`Delete ${league.name}?`}
-      description="This removes the league, its divisions, its teams, and their lineups."
+      description="This removes the league, its divisions, its teams, their lineups, and the schedule."
       confirmLabel="Delete league"
       onConfirm={async () => { await api(`/leagues/${league.id}`, { method: "DELETE" }); navigate("/leagues"); }}
     />

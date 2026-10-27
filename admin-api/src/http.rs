@@ -81,7 +81,8 @@ pub async fn exchange(
         .trim()
         .to_string();
     let mut db = lock(&state)?;
-    let Some((session_token, expires_at, owner)) = store::redeem_magic_link(&mut db, &token)? else {
+    let Some((session_token, expires_at, owner)) = store::redeem_magic_link(&mut db, &token)?
+    else {
         return Err(ApiError::new(
             StatusCode::UNAUTHORIZED,
             "That sign-in link is expired or already used.",
@@ -125,35 +126,30 @@ pub async fn current_session(
     )
 }
 
-pub async fn list_leagues(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
+pub async fn list_leagues(State(state): State<AppState>) -> Result<Response, ApiError> {
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let leagues = store::list_leagues(&db, &owner.id)?;
     json_response(StatusCode::OK, json!({ "leagues": leagues }))
 }
 
 pub async fn create_league(
     State(state): State<AppState>,
-    headers: HeaderMap,
     request: Request<Body>,
 ) -> Result<Response, ApiError> {
     let body = read_json(request).await?;
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let league = store::create_league(&db, &owner.id, &body)?;
     json_response(StatusCode::CREATED, json!({ "league": league }))
 }
 
 pub async fn get_league(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(league_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let league = store::get_league(&db, &owner.id, &league_id)?;
     let teams = store::list_league_teams(&db, &owner.id, &league_id)?;
     json_response(StatusCode::OK, json!({ "league": league, "teams": teams }))
@@ -161,117 +157,140 @@ pub async fn get_league(
 
 pub async fn update_league(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(league_id): Path<String>,
     request: Request<Body>,
 ) -> Result<Response, ApiError> {
     let body = read_json(request).await?;
-    let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
-    let league = store::update_league(&db, &owner.id, &league_id, &body)?;
+    let mut db = lock(&state)?;
+    let owner = store::office_owner(&db)?;
+    let league = store::update_league(&mut db, &owner.id, &league_id, &body)?;
     json_response(StatusCode::OK, json!({ "league": league }))
 }
 
 pub async fn delete_league(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(league_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let mut db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     store::delete_league(&mut db, &owner.id, &league_id)?;
     json_response(StatusCode::OK, json!({ "ok": true }))
 }
 
-pub async fn list_divisions(
+pub async fn read_schedule(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(league_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let schedule = store::read_schedule(&db, &league_id)?;
+    json_response(StatusCode::OK, schedule)
+}
+
+pub async fn build_schedule(
+    State(state): State<AppState>,
+    Path(league_id): Path<String>,
+    request: Request<Body>,
+) -> Result<Response, ApiError> {
+    let bytes = axum::body::to_bytes(request.into_body(), 1_048_576)
+        .await
+        .map_err(|_| ApiError::bad("The request body must be JSON."))?;
+    if !bytes.is_empty() {
+        let value: Value = serde_json::from_slice(&bytes)
+            .map_err(|_| ApiError::bad("The request body must be JSON."))?;
+        let record = crate::validate::object(&value)?;
+        if !record.is_empty() {
+            return Err(ApiError::bad(
+                "The schedule is built from the saved season length, the games inside the division, the games outside it, and the rivalry pairs.",
+            ));
+        }
+    }
+    let mut db = lock(&state)?;
+    let schedule = store::build_schedule(&mut db, &league_id)?;
+    json_response(StatusCode::CREATED, schedule)
+}
+
+pub async fn list_divisions(
+    State(state): State<AppState>,
+    Path(league_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let db = lock(&state)?;
+    let owner = store::office_owner(&db)?;
     let divisions = store::list_divisions(&db, &owner.id, &league_id)?;
     json_response(StatusCode::OK, json!({ "divisions": divisions }))
 }
 
 pub async fn create_division(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(league_id): Path<String>,
     request: Request<Body>,
 ) -> Result<Response, ApiError> {
     let body = read_json(request).await?;
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let division = store::create_division(&db, &owner.id, &league_id, &body)?;
     json_response(StatusCode::CREATED, json!({ "division": division }))
 }
 
 pub async fn get_division(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(division_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let division = store::get_division(&db, &owner.id, &division_id)?;
     json_response(StatusCode::OK, json!({ "division": division }))
 }
 
 pub async fn update_division(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(division_id): Path<String>,
     request: Request<Body>,
 ) -> Result<Response, ApiError> {
     let body = read_json(request).await?;
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let division = store::update_division(&db, &owner.id, &division_id, &body)?;
     json_response(StatusCode::OK, json!({ "division": division }))
 }
 
 pub async fn delete_division(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(division_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     store::delete_division(&db, &owner.id, &division_id)?;
     json_response(StatusCode::OK, json!({ "ok": true }))
 }
 
-pub async fn list_controlled(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Response, ApiError> {
+pub async fn list_controlled(State(state): State<AppState>) -> Result<Response, ApiError> {
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let (teams, leagues) = store::list_controlled(&db, &owner.id)?;
-    json_response(StatusCode::OK, json!({ "teams": teams, "leagues": leagues }))
+    json_response(
+        StatusCode::OK,
+        json!({ "teams": teams, "leagues": leagues }),
+    )
 }
 
 pub async fn list_league_teams(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(league_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let teams = store::list_league_teams(&db, &owner.id, &league_id)?;
     json_response(StatusCode::OK, json!({ "teams": teams }))
 }
 
 pub async fn create_team(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(league_id): Path<String>,
     request: Request<Body>,
 ) -> Result<Response, ApiError> {
     let body = read_json(request).await?;
     let mut db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let (team, team_count, in_bounds, bound_label) =
         store::create_team(&mut db, &owner.id, &league_id, &body)?;
     json_response(
@@ -287,94 +306,86 @@ pub async fn create_team(
 
 pub async fn get_team(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(team_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let page = store::get_team_page(&db, &owner.id, &team_id)?;
     json_response(StatusCode::OK, page)
 }
 
 pub async fn update_team(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(team_id): Path<String>,
     request: Request<Body>,
 ) -> Result<Response, ApiError> {
     let body = read_json(request).await?;
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let team = store::update_team(&db, &owner.id, &team_id, &body)?;
     json_response(StatusCode::OK, json!({ "team": team }))
 }
 
 pub async fn delete_team(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(team_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let mut db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     store::delete_team(&mut db, &owner.id, &team_id)?;
     json_response(StatusCode::OK, json!({ "ok": true }))
 }
 
 pub async fn list_lineups(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(team_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let lineups = store::list_lineups(&db, &owner.id, &team_id)?;
     json_response(StatusCode::OK, json!({ "lineups": lineups }))
 }
 
 pub async fn create_lineup(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(team_id): Path<String>,
     request: Request<Body>,
 ) -> Result<Response, ApiError> {
     let body = read_json(request).await?;
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let lineup = store::create_lineup(&db, &owner.id, &team_id, &body)?;
     json_response(StatusCode::CREATED, json!({ "lineup": lineup }))
 }
 
 pub async fn get_lineup(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(lineup_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let page = store::get_lineup_page(&db, &owner.id, &lineup_id)?;
     json_response(StatusCode::OK, page)
 }
 
 pub async fn update_lineup(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(lineup_id): Path<String>,
     request: Request<Body>,
 ) -> Result<Response, ApiError> {
     let body = read_json(request).await?;
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     let lineup = store::update_lineup(&db, &owner.id, &lineup_id, &body)?;
     json_response(StatusCode::OK, json!({ "lineup": lineup }))
 }
 
 pub async fn delete_lineup(
     State(state): State<AppState>,
-    headers: HeaderMap,
     Path(lineup_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let db = lock(&state)?;
-    let owner = store::require_owner(&db, &bearer(&headers)?)?;
+    let owner = store::office_owner(&db)?;
     store::delete_lineup(&db, &owner.id, &lineup_id)?;
     json_response(StatusCode::OK, json!({ "ok": true }))
 }

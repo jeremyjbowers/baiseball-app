@@ -1,21 +1,5 @@
-import path from "path";
-import { fileURLToPath } from "url";
-import { DatabaseSync } from "node:sqlite";
-
 const base = process.env.LEAGUE_OFFICE_URL ?? "http://127.0.0.1:41742";
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const dbPath = process.env.LEAGUE_ADMIN_DB ?? path.join(root, "data", "league-admin.sqlite");
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-const email = `prover-${stamp}@league-office.test`.toLowerCase();
-const positions = ["CF", "SS", "LF", "1B", "DH", "RF", "3B", "2B", "C"];
-
-function card(hand) {
-  return positions.map((position, index) => ({
-    battingOrder: index + 1,
-    playerName: `${hand} Batter ${index + 1}`,
-    position,
-  }));
-}
 
 function assert(condition, message) {
   if (!condition) {
@@ -24,13 +8,10 @@ function assert(condition, message) {
   }
 }
 
-async function send(pathname, { method = "GET", body, token } = {}) {
+async function send(pathname, { method = "GET", body } = {}) {
   const response = await fetch(`${base}${pathname}`, {
     method,
-    headers: {
-      ...(body === undefined ? {} : { "content-type": "application/json" }),
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
+    headers: body === undefined ? {} : { "content-type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await response.text();
@@ -45,145 +26,189 @@ async function send(pathname, { method = "GET", body, token } = {}) {
   return { status: response.status, json };
 }
 
-const unauth = await send("/leagues", { method: "POST", body: { name: "Closed", lineupLock: "game" } });
-assert(unauth.status === 401, `unsigned request should be 401, got ${unauth.status}`);
+function tally(games) {
+  const teams = new Map();
+  for (const game of games) {
+    for (const [id, name] of [
+      [game.homeTeamId, game.homeTeamName],
+      [game.awayTeamId, game.awayTeamName],
+    ]) {
+      const row = teams.get(id) ?? { name, games: 0, inside: 0, outside: 0 };
+      row.games += 1;
+      if (game.sameDivision) row.inside += 1;
+      else row.outside += 1;
+      teams.set(id, row);
+    }
+  }
+  return teams;
+}
 
-const issued = await send("/auth/magic-links", { method: "POST", body: { email } });
-assert(issued.status === 200, `magic link status ${issued.status} ${JSON.stringify(issued.json)}`);
-assert(typeof issued.json.magicLink === "string" && issued.json.magicLink.includes("/auth/verify?token="), "magic link missing");
-const magicToken = new URL(issued.json.magicLink).searchParams.get("token");
-assert(magicToken && magicToken.length >= 32, "magic-link token missing");
+function pairCount(games, left, right, rivalryOnly) {
+  return games.filter((game) => {
+    const pair = [game.homeTeamId, game.awayTeamId].sort().join(":");
+    const wanted = [left, right].sort().join(":");
+    return pair === wanted && (!rivalryOnly || game.rivalry);
+  }).length;
+}
 
-const db = new DatabaseSync(dbPath, { readOnly: true });
-const stored = db.prepare("SELECT token, used_at, owner_id FROM magic_links WHERE token = ?").get(magicToken);
-assert(stored?.token === magicToken, "magic-link token was not stored");
-assert(stored.used_at == null, "magic-link token was already used");
-const owner = db.prepare("SELECT email FROM owners WHERE id = ?").get(stored.owner_id);
-assert(owner?.email === email, `owner email was not stored: ${owner?.email}`);
+async function divisionAndTeams(leagueId, groups) {
+  const ids = {};
+  for (const [divisionName, teamNames] of Object.entries(groups)) {
+    const division = await send(`/leagues/${leagueId}/divisions`, {
+      method: "POST",
+      body: { name: divisionName },
+    });
+    assert(division.status === 201, `${divisionName} ${division.status} ${JSON.stringify(division.json)}`);
+    ids[divisionName] = [];
+    for (const name of teamNames) {
+      const team = await send(`/leagues/${leagueId}/teams`, {
+        method: "POST",
+        body: { name, divisionId: division.json.division.id, homePark: `${name} Park` },
+      });
+      assert(team.status === 201, `${name} ${team.status} ${JSON.stringify(team.json)}`);
+      ids[divisionName].push(team.json.team.id);
+    }
+  }
+  return ids;
+}
 
-const session = await send("/auth/sessions", { method: "POST", body: { token: magicToken } });
-assert(session.status === 200, `exchange ${session.status} ${JSON.stringify(session.json)}`);
-const bearer = session.json.sessionToken;
-assert(bearer, "session token missing");
+const open = await send("/leagues");
+assert(open.status === 200 && Array.isArray(open.json.leagues), `leagues without a session ${open.status}`);
 
-const again = await send("/auth/sessions", { method: "POST", body: { token: magicToken } });
-assert(again.status === 401, `used magic link should be 401, got ${again.status}`);
-
-const who = await send("/auth/session", { token: bearer });
-assert(who.status === 200 && who.json.owner.email === email, "session read");
-
-const leagueResponse = await send("/leagues", {
+const badSum = await send("/leagues", {
   method: "POST",
-  token: bearer,
-  body: { name: `Proof League ${stamp}`, lineupLock: "game" },
+  body: { name: "Bad sum", leagueType: "ulmg", seasonLength: 6, divisionGames: 4, outsideGames: 1 },
 });
-assert(leagueResponse.status === 201, `league ${leagueResponse.status} ${JSON.stringify(leagueResponse.json)}`);
-const leagueId = leagueResponse.json.league.id;
-assert(leagueResponse.json.league.inBounds === false, "an empty league should be out of bounds");
+assert(badSum.status === 400, `mismatched counts should be 400, got ${badSum.status}`);
 
-const divisionResponse = await send(`/leagues/${leagueId}/divisions`, {
+const ulmg = await send("/leagues", {
   method: "POST",
-  token: bearer,
-  body: { name: "Proof East" },
+  body: {
+    name: `Harbor ULMG ${stamp}`,
+    leagueType: "ulmg",
+    seasonLength: 6,
+    divisionGames: 4,
+    outsideGames: 2,
+  },
 });
-assert(divisionResponse.status === 201, `division ${divisionResponse.status} ${JSON.stringify(divisionResponse.json)}`);
-const divisionId = divisionResponse.json.division.id;
-
-const spare = await send(`/leagues/${leagueId}/divisions`, {
-  method: "POST",
-  token: bearer,
-  body: { name: "Proof Spare" },
-});
-assert(spare.status === 201, "spare division");
-const removed = await send(`/divisions/${spare.json.division.id}`, { method: "DELETE", token: bearer });
-assert(removed.status === 200, `delete spare division ${removed.status}`);
-
-const teamResponse = await send(`/leagues/${leagueId}/teams`, {
-  method: "POST",
-  token: bearer,
-  body: { name: "Proof Club", divisionId, homePark: "Proof Park", ownerEmail: email },
-});
-assert(teamResponse.status === 201, `team ${teamResponse.status} ${JSON.stringify(teamResponse.json)}`);
-const teamId = teamResponse.json.team.id;
-assert(teamResponse.json.team.homePark === "Proof Park", "home park");
-assert(teamResponse.json.teamCount === 1, "team count");
-
-const lineupResponse = await send(`/teams/${teamId}/lineups`, {
-  method: "POST",
-  token: bearer,
-  body: { name: "Proof card", vsLhp: card("Left"), vsRhp: card("Right") },
-});
-assert(lineupResponse.status === 201, `lineup ${lineupResponse.status} ${JSON.stringify(lineupResponse.json)}`);
-const lineupId = lineupResponse.json.lineup.id;
-assert(lineupResponse.json.lineup.vsLhp.length === 9 && lineupResponse.json.lineup.vsRhp[8].position === "C", "cards");
-
-const renamed = await send(`/leagues/${leagueId}`, {
+assert(ulmg.status === 201, `ulmg ${ulmg.status} ${JSON.stringify(ulmg.json)}`);
+assert(ulmg.json.league.leagueType === "ulmg" && ulmg.json.league.lineupLock === "game", "ulmg lock");
+const ulmgId = ulmg.json.league.id;
+const ulmgTeams = await divisionAndTeams(ulmgId, { East: ["Anchors", "Buoys"], West: ["Clippers", "Dories"] });
+const saved = await send(`/leagues/${ulmgId}`, {
   method: "PATCH",
-  token: bearer,
-  body: { name: `Proof League ${stamp} renamed`, lineupLock: "week" },
+  body: {
+    rivalries: [
+      { teamId: ulmgTeams.East[0], opponentTeamId: ulmgTeams.East[1], games: 4 },
+      { teamId: ulmgTeams.East[0], opponentTeamId: ulmgTeams.West[0], games: 2 },
+    ],
+  },
 });
-assert(renamed.status === 200 && renamed.json.league.lineupLock === "week", "league update");
-assert((await send(`/divisions/${divisionId}`, { method: "PATCH", token: bearer, body: { name: "Proof East renamed" } })).status === 200, "division update");
-assert((await send(`/teams/${teamId}`, { method: "PATCH", token: bearer, body: { name: "Proof Club renamed", homePark: "Proof Park renamed", divisionId } })).json.team.homePark === "Proof Park renamed", "team update");
-assert((await send(`/lineups/${lineupId}`, { method: "PATCH", token: bearer, body: { name: "Proof card renamed", vsLhp: card("Left"), vsRhp: card("Right") } })).json.lineup.name === "Proof card renamed", "lineup update");
+assert(saved.status === 200 && saved.json.league.rivalries.length === 2, "ulmg rivalries");
 
-const readLeague = await send(`/leagues/${leagueId}`, { token: bearer });
-assert(readLeague.json.teams.length === 1, "team list");
-assert(readLeague.json.league.divisions.some((division) => division.name === "Proof East renamed"), "division list");
-const readLineup = await send(`/lineups/${lineupId}`, { token: bearer });
-assert(readLineup.json.lineup.vsLhp.length === 9 && readLineup.json.lineup.vsRhp.length === 9, "cards on read");
-
-assert((await send(`/lineups/${lineupId}`, { method: "DELETE", token: bearer })).status === 200, "delete lineup");
-assert((await send(`/lineups/${lineupId}`, { token: bearer })).status === 404, "deleted lineup");
-const restored = await send(`/teams/${teamId}/lineups`, {
-  method: "POST",
-  token: bearer,
-  body: { name: "Proof card restored", vsLhp: card("Left"), vsRhp: card("Right") },
-});
-assert(restored.status === 201, "restore lineup");
-
-let teamCount = 1;
-while (teamCount < 10) {
-  const added = await send(`/leagues/${leagueId}/teams`, {
-    method: "POST",
-    token: bearer,
-    body: { name: `Proof Club ${teamCount + 1}`, divisionId, homePark: "Proof Park", ownerEmail: email },
-  });
-  assert(added.status === 201, `add team ${teamCount + 1}: ${added.status} ${JSON.stringify(added.json)}`);
-  teamCount = added.json.teamCount;
+const built = await send(`/leagues/${ulmgId}/schedule`, { method: "POST" });
+assert(built.status === 201, `ulmg build ${built.status} ${JSON.stringify(built.json)}`);
+assert(built.json.games.length === 12 && built.json.matchesConfiguration === true, "ulmg game count");
+const ulmgTotals = tally(built.json.games);
+assert(ulmgTotals.size === 4, "ulmg teams on the schedule");
+for (const row of ulmgTotals.values()) {
+  assert(row.games === 6 && row.inside === 4 && row.outside === 2, `${row.name} counts ${JSON.stringify(row)}`);
 }
-const blocked = await send(`/teams/${teamId}`, { method: "DELETE", token: bearer });
-assert(blocked.status === 409, `delete at 10 should be 409, got ${blocked.status}`);
-const eleventh = await send(`/leagues/${leagueId}/teams`, {
-  method: "POST",
-  token: bearer,
-  body: { name: "Proof Club 11", divisionId, homePark: "Proof Park", ownerEmail: email },
-});
-assert(eleventh.status === 201, "eleventh team");
-assert((await send(`/teams/${eleventh.json.team.id}`, { method: "DELETE", token: bearer })).status === 200, "delete above 10");
+assert(pairCount(built.json.games, ulmgTeams.East[0], ulmgTeams.East[1], true) === 4, "inside rivalry");
+assert(pairCount(built.json.games, ulmgTeams.East[0], ulmgTeams.West[0], true) === 2, "outside rivalry");
+const read = await send(`/leagues/${ulmgId}/schedule`);
+assert(read.status === 200 && read.json.games.length === 12, "ulmg read back");
+const firstIds = read.json.games.map((game) => game.id);
 
-while (teamCount < 30) {
-  const added = await send(`/leagues/${leagueId}/teams`, {
-    method: "POST",
-    token: bearer,
-    body: { name: `Proof Club ${teamCount + 1}`, divisionId, homePark: "Proof Park", ownerEmail: email },
-  });
-  assert(added.status === 201, `add team ${teamCount + 1}: ${added.status} ${JSON.stringify(added.json)}`);
-  teamCount = added.json.teamCount;
-  if (teamCount === 26 || teamCount === 28) assert(added.json.inBounds === false, `${teamCount} closed`);
-  if (teamCount === 27 || teamCount === 30) assert(added.json.inBounds === true, `${teamCount} in bounds`);
+const replaced = await send(`/leagues/${ulmgId}/schedule`, { method: "POST" });
+assert(replaced.status === 201, "ulmg rebuild");
+const secondIds = replaced.json.games.map((game) => game.id);
+assert(secondIds.every((id) => !firstIds.includes(id)), "rebuild replaced the games");
+assert(replaced.json.games.length === 12, "rebuild length");
+
+const prose = await send(`/leagues/${ulmgId}/schedule`, {
+  method: "POST",
+  body: { request: "build me a schedule that has every team play twice as many games in their division as outside it" },
+});
+assert(prose.status === 400, `natural language should be 400, got ${prose.status} ${JSON.stringify(prose.json)}`);
+const afterProse = await send(`/leagues/${ulmgId}/schedule`);
+assert(
+  afterProse.json.games.map((game) => game.id).join() === secondIds.join(),
+  "a rejected build left the schedule in place",
+);
+
+const npl = await send("/leagues", {
+  method: "POST",
+  body: {
+    name: `Harbor NPL ${stamp}`,
+    leagueType: "npl",
+    seasonLength: 4,
+    divisionGames: 2,
+    outsideGames: 2,
+  },
+});
+assert(npl.status === 201 && npl.json.league.lineupLock === "week", `npl ${npl.status} ${JSON.stringify(npl.json)}`);
+const nplId = npl.json.league.id;
+const nplTeams = await divisionAndTeams(nplId, {
+  Atlantic: ["Pines", "Quills", "Rails"],
+  Pacific: ["Sloops", "Tides", "Umiaks"],
+});
+const nplSaved = await send(`/leagues/${nplId}`, {
+  method: "PATCH",
+  body: {
+    rivalries: [{ teamId: nplTeams.Atlantic[0], opponentTeamId: nplTeams.Pacific[0], games: 2 }],
+  },
+});
+assert(nplSaved.status === 200, "npl rivalry");
+const nplBuilt = await send(`/leagues/${nplId}/schedule`, { method: "POST" });
+assert(nplBuilt.status === 201 && nplBuilt.json.games.length === 12, `npl build ${nplBuilt.status} ${JSON.stringify(nplBuilt.json?.error ?? nplBuilt.json?.games?.length)}`);
+const nplRead = await send(`/leagues/${nplId}/schedule`);
+assert(nplRead.json.games.length === 12 && nplRead.json.matchesConfiguration === true, "npl read back");
+const nplTotals = tally(nplRead.json.games);
+assert(nplTotals.size === 6, "npl teams");
+for (const row of nplTotals.values()) {
+  assert(row.games === 4 && row.inside === 2 && row.outside === 2, `${row.name} counts ${JSON.stringify(row)}`);
 }
-const over = await send(`/leagues/${leagueId}/teams`, {
-  method: "POST",
-  token: bearer,
-  body: { name: "Proof Club 31", divisionId, homePark: "Proof Park", ownerEmail: email },
-});
-assert(over.status === 409, `31st team should be 409, got ${over.status}`);
-const finalLeague = await send(`/leagues/${leagueId}`, { token: bearer });
-assert(finalLeague.json.league.teamCount === 30 && finalLeague.json.teams.length === 30, "final count");
+assert(
+  pairCount(nplRead.json.games, nplTeams.Atlantic[0], nplTeams.Pacific[0], true) === 2,
+  "npl rivalry games",
+);
 
-const used = new DatabaseSync(dbPath, { readOnly: true })
-  .prepare("SELECT used_at FROM magic_links WHERE token = ?")
-  .get(magicToken);
-assert(typeof used?.used_at === "string" && used.used_at.length > 0, "magic link was not marked used");
-console.log(`proved magic-link token, league ${leagueId}, division ${divisionId}, team ${teamId}, lineup ${restored.json.lineup.id}`);
+const narrow = await send("/leagues", {
+  method: "POST",
+  body: { name: `Narrow ${stamp}`, leagueType: "ulmg", seasonLength: 2, divisionGames: 2, outsideGames: 0 },
+});
+const narrowId = narrow.json.league.id;
+const only = await send(`/leagues/${narrowId}/divisions`, { method: "POST", body: { name: "Only" } });
+for (const name of ["One", "Two", "Three"]) {
+  const added = await send(`/leagues/${narrowId}/teams`, {
+    method: "POST",
+    body: { name, divisionId: only.json.division.id, homePark: "Park" },
+  });
+  assert(added.status === 201, `narrow team ${name}`);
+}
+const narrowBuilt = await send(`/leagues/${narrowId}/schedule`, { method: "POST" });
+assert(narrowBuilt.status === 201 && narrowBuilt.json.games.length === 3, "narrow build");
+const kept = narrowBuilt.json.games.map((game) => game.id);
+const retarget = await send(`/leagues/${narrowId}`, {
+  method: "PATCH",
+  body: { seasonLength: 1, divisionGames: 1, outsideGames: 0 },
+});
+assert(retarget.status === 200, "retarget counts");
+const refused = await send(`/leagues/${narrowId}/schedule`, { method: "POST" });
+assert(refused.status === 400, `impossible build should be 400, got ${refused.status} ${JSON.stringify(refused.json)}`);
+const keptRead = await send(`/leagues/${narrowId}/schedule`);
+assert(keptRead.json.games.map((game) => game.id).join() === kept.join(), "failed build kept the previous schedule");
+assert(keptRead.json.matchesConfiguration === false, "stale schedule is marked");
+
+const positions = ["CF", "SS", "LF", "1B", "DH", "RF", "3B", "2B", "C"];
+const card = (hand) => positions.map((position, index) => ({ battingOrder: index + 1, playerName: `${hand} Batter ${index + 1}`, position }));
+const lineup = await send(`/teams/${ulmgTeams.East[0]}/lineups`, {
+  method: "POST",
+  body: { name: "Opening card", vsLhp: card("Left"), vsRhp: card("Right") },
+});
+assert(lineup.status === 201 && lineup.json.lineup.vsLhp.length === 9, `lineup ${lineup.status}`);
+const lineupRead = await send(`/lineups/${lineup.json.lineup.id}`);
+assert(lineupRead.status === 200 && lineupRead.json.canEditLineups === true, "lineup read");
+
+console.log(`proved ULMG ${ulmgId}, NPL ${nplId}, and a rejected rebuild on ${narrowId}`);

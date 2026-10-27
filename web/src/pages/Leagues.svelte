@@ -1,7 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import { api } from "../lib/api.js";
-  import { lockDetail } from "../lib/copy.js";
+  import { typeDetail, typeLabel } from "../lib/copy.js";
 
   let leagues = $state([]);
   let loading = $state(true);
@@ -27,7 +27,7 @@
   <div class="spread">
     <div>
       <h1>Leagues</h1>
-      <p class="muted">A league holds divisions and teams. ULMG is 16 teams in four divisions. NPL is 24 teams in six divisions. Those are examples. You name the leagues and the divisions.</p>
+      <p class="muted">A league holds divisions, teams, lineups, and a schedule. ULMG plays one game at a time, a season behind. NPL simulates a week and mixes current and past stats. You name the leagues and the divisions.</p>
     </div>
     <a class="button" href="/leagues/new">Create a league</a>
   </div>
@@ -43,7 +43,7 @@
   {#if !loading && !error && leagues.length === 0}
     <div class="empty stack">
       <h2>No leagues yet</h2>
-      <p class="muted">Create one to add divisions and teams. You become the administrator of a league you create.</p>
+      <p class="muted">Create one, then add divisions and teams and build the schedule.</p>
       <a class="button" href="/leagues/new">Create a league</a>
     </div>
   {/if}
@@ -51,10 +51,17 @@
     {#each leagues as league (league.id)}
       <article class="card stack">
         <h2><a class="link" href="/leagues/{league.id}">{league.name}</a></h2>
-        <p class="muted">{lockDetail(league.lineupLock)}</p>
+        <p>{typeLabel(league.leagueType)}</p>
+        <p class="muted">{typeDetail(league.leagueType)}</p>
+        {#if league.seasonLength != null}
+          <p class="muted">{league.seasonLength} games. {league.divisionGames} inside the division, {league.outsideGames} outside it.</p>
+        {/if}
         <p class:danger={!league.inBounds}>{league.boundLabel}</p>
-        <p class="muted">{league.divisionCount} {league.divisionCount === 1 ? "division" : "divisions"}</p>
-        <a class="button secondary" href="/leagues/{league.id}">Open league</a>
+        <p class="muted">{league.divisionCount} {league.divisionCount === 1 ? "division" : "divisions"} · {league.scheduledGameCount || 0} scheduled games</p>
+        <div class="row">
+          <a class="button secondary" href="/leagues/{league.id}">Open league</a>
+          <a class="button ghost" href="/leagues/{league.id}/schedule">Schedule</a>
+        </div>
       </article>
     {/each}
   {/if}

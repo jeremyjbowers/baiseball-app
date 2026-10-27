@@ -1,5 +1,6 @@
 mod error;
 mod http;
+mod schedule;
 mod store;
 mod validate;
 
@@ -51,7 +52,10 @@ async fn main() {
         .route("/auth/magic-links", post(http::magic_link))
         .route("/auth/sessions", post(http::exchange).delete(http::logout))
         .route("/auth/session", get(http::current_session))
-        .route("/leagues", get(http::list_leagues).post(http::create_league))
+        .route(
+            "/leagues",
+            get(http::list_leagues).post(http::create_league),
+        )
         .route(
             "/leagues/:league_id",
             get(http::get_league)
@@ -65,6 +69,10 @@ async fn main() {
         .route(
             "/leagues/:league_id/teams",
             get(http::list_league_teams).post(http::create_team),
+        )
+        .route(
+            "/leagues/:league_id/schedule",
+            get(http::read_schedule).post(http::build_schedule),
         )
         .route(
             "/divisions/:division_id",

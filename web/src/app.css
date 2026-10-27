@@ -139,6 +139,64 @@ button:disabled { opacity: 0.6; cursor: not-allowed; }
 
 .cards { display: grid; gap: 1rem; }
 
+fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-inline-size: 0;
+}
+
+legend {
+  font-family: Newsreader, Georgia, serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.choice {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.75rem;
+  align-items: start;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: white;
+  padding: 0.8rem;
+}
+
+.choice input {
+  width: 1.1rem;
+  min-height: 1.1rem;
+  margin-top: 0.25rem;
+}
+
+.choice:has(input:checked) {
+  border-color: var(--cardinal);
+  box-shadow: inset 0 0 0 1px var(--cardinal);
+}
+
+.choice span { display: grid; gap: 0.15rem; }
+
+.counts, .rivalry-form { display: grid; gap: 0.75rem; }
+
+.schedule-head, .schedule-row {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.schedule-head {
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.totals { margin: 0; padding-left: 1.1rem; }
+.totals li { margin: 0.2rem 0; }
+
 dialog {
   border: 1px solid var(--line);
   border-radius: 14px;
@@ -152,4 +210,7 @@ dialog::backdrop { background: rgb(44 36 28 / 35%); }
   .slot { grid-template-columns: 2.5rem 1fr 11rem; align-items: end; }
   .header-inner, .form-inline { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
   .form-inline .field { flex: 1; }
+  .counts { grid-template-columns: repeat(3, 1fr); }
+  .rivalry-form { grid-template-columns: 1fr 1fr 6.5rem auto; align-items: end; }
+  .schedule-head, .schedule-row { grid-template-columns: 1fr 1fr 14rem; align-items: center; }
 }

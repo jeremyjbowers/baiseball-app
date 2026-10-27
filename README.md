@@ -43,7 +43,7 @@ AWS Lambda, DigitalOcean, and App Engine are later places this can run. This sli
 
 ## League office
 
-The office is two processes. The Rust API in `admin-api/` owns leagues, divisions, teams, lineups, owners, and magic-link tokens in SQLite. The Svelte app in `web/` calls that API and stores only the signed-in session. Neither one changes the plate-appearance simulator.
+The office is two processes. The Rust API in `admin-api/` owns leagues, divisions, teams, lineups, rivalries, and the schedule in SQLite. The Svelte app in `web/` calls that API and stores no league data. Sign-in is parked. Neither process changes the plate-appearance simulator.
 
 ```bash
 cd admin-api
@@ -58,7 +58,7 @@ npm install
 npm run dev
 ```
 
-The app listens on `0.0.0.0:41741`. Open `http://127.0.0.1:41741`. Sign in with an email address. This slice has no mail provider: the magic link is printed in the API log and shown on the confirmation screen.
+The app listens on `0.0.0.0:41741`. Open `http://127.0.0.1:41741`. The office opens on leagues. Create a league as ULMG or NPL, set the season length and how many games are inside the division and outside it, add divisions and teams, name rivalry pairs, and build the schedule.
 
 With the API running:
 
@@ -66,4 +66,4 @@ With the API running:
 node admin-api/scripts/prove-admin.mjs
 ```
 
-The route contract is `docs/admin-api.md` in the project notes.
+The route contract is `docs/admin-api.md` in the project notes. Sign-in routes there are later.
