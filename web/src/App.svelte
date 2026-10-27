@@ -2,6 +2,7 @@
   import { api } from "./lib/api.js";
   import { match, navigate, requiresLogin, route } from "./lib/nav.js";
   import { clearSession, getSession } from "./lib/session.js";
+  import { PRIVACY_URL, TERMS_URL } from "./lib/site.js";
   import Account from "./pages/Account.svelte";
   import Home from "./pages/Home.svelte";
   import LeaguePage from "./pages/LeaguePage.svelte";
@@ -73,8 +74,8 @@
         <strong>League office</strong>
       </a>
       <nav class="row" aria-label="Site">
-        <a class="button ghost" href="/terms/">Terms</a>
-        <a class="button ghost" href="/privacy/">Privacy</a>
+        <a class="button ghost" href={TERMS_URL}>Terms</a>
+        <a class="button ghost" href={PRIVACY_URL}>Privacy</a>
         <a class="button {view.name === "sign-in" || view.name === "sent" ? "secondary" : ""}" href="/sign-in">Sign in</a>
       </nav>
     </div>

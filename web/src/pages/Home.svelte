@@ -1,3 +1,7 @@
+<script>
+  import { PRIVACY_URL, TERMS_URL } from "../lib/site.js";
+</script>
+
 <div class="home stack">
   <section class="hero stack">
     <p class="eyebrow">bAIseball</p>
@@ -5,8 +9,8 @@
     <p class="lede">TKTKTK. Marketing copy for the public homepage goes here: what bAIseball is, who it is for, and why a league runs through this office.</p>
     <div class="row">
       <a class="button" href="/sign-in">Sign in to the office</a>
-      <a class="button secondary" href="/terms/">Terms</a>
-      <a class="button ghost" href="/privacy/">Privacy</a>
+      <a class="button secondary" href={TERMS_URL}>Terms</a>
+      <a class="button ghost" href={PRIVACY_URL}>Privacy</a>
     </div>
   </section>
 
@@ -21,9 +25,9 @@
   </section>
 
   <footer class="home-foot muted">
-    <a class="link" href="/terms/">Terms of Service</a>
+    <a class="link" href={TERMS_URL}>Terms of Service</a>
     ·
-    <a class="link" href="/privacy/">Privacy Policy</a>
+    <a class="link" href={PRIVACY_URL}>Privacy Policy</a>
     ·
     <a class="link" href="/sign-in">Sign in</a>
   </footer>

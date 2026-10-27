@@ -1,4 +1,6 @@
 <script>
+  import { PRIVACY_URL, TERMS_URL } from "./site.js";
+
   let {
     idPrefix = "sms",
     transactional = $bindable(false),
@@ -31,13 +33,13 @@
   <label class="choice" for={termsId}>
     <input id={termsId} type="checkbox" bind:checked={terms} required />
     <span>
-      <strong>I have read and agree to the <a class="link" href="/terms/" target="_blank" rel="noopener">Terms of Service</a> and <a class="link" href="/privacy/" target="_blank" rel="noopener">Privacy Policy</a>.</strong>
+      <strong>I have read and agree to the <a class="link" href={TERMS_URL} target="_blank" rel="noopener">Terms of Service</a> and <a class="link" href={PRIVACY_URL} target="_blank" rel="noopener">Privacy Policy</a>.</strong>
       <span class="muted">This agreement is separate from text-message consent.</span>
     </span>
   </label>
   <div class="sms-disclosure" role="note">
     <p><strong>Msg &amp; data rates may apply.</strong> Message frequency varies. You may receive up to 8 messages per month. Consent is not a condition of using the league office.</p>
     <p>Reply <strong>STOP</strong> to opt out of texts at any time. Reply <strong>HELP</strong> for help, or email <a class="link" href="mailto:jeremyjbowers@gmail.com">jeremyjbowers@gmail.com</a>.</p>
-    <p>For more information, see our <a class="link" href="/terms/" target="_blank" rel="noopener">Terms of Service</a> and <a class="link" href="/privacy/" target="_blank" rel="noopener">Privacy Policy</a>.</p>
+    <p>For more information, see our <a class="link" href={TERMS_URL} target="_blank" rel="noopener">Terms of Service</a> and <a class="link" href={PRIVACY_URL} target="_blank" rel="noopener">Privacy Policy</a>.</p>
   </div>
 </div>

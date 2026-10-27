@@ -1,3 +1,7 @@
+<script>
+  import { PRIVACY_URL, SITE_URL } from "../lib/site.js";
+</script>
+
 <div class="narrow stack legal">
   <div class="card stack">
     <div>
@@ -5,7 +9,7 @@
       <p class="muted">Last updated October 27, 2026. These terms govern use of League office, the administration site for bAIseball leagues operated at baiseball.app.</p>
     </div>
     <h2>1. The service</h2>
-    <p>League office lets league owners and club operators sign in, manage leagues, teams, lineups, and schedules, and receive account-related notices. By creating an account or using the service, you agree to these Terms of Service and the <a class="link" href="/privacy/">Privacy Policy</a>.</p>
+    <p>League office lets league owners and club operators sign in, manage leagues, teams, lineups, and schedules, and receive account-related notices. By creating an account or using the service, you agree to these Terms of Service and the <a class="link" href={PRIVACY_URL}>Privacy Policy</a>.</p>
     <h2>2. Accounts and sign-in</h2>
     <p>You may sign in with a one-time link sent to your email address, or to a mobile phone number you have saved on your owner record after opting in to texts. You must use contact details you control. You are responsible for activity on your account.</p>
     <h2>3. SMS / text messaging program (League office alerts)</h2>
@@ -19,7 +23,7 @@
     <h2>4. Acceptable use</h2>
     <p>Use the office only for leagues and teams you are entitled to administer. Do not attempt to access another owner’s account, harvest phone numbers, abuse the messaging program, or disrupt the service.</p>
     <h2>5. Contact</h2>
-    <p>League office / bAIseball · <a class="link" href="mailto:jeremyjbowers@gmail.com">jeremyjbowers@gmail.com</a> · <a class="link" href="https://baiseball.app">https://baiseball.app</a></p>
-    <p class="muted"><a class="link" href="/privacy/">Privacy Policy</a> · <a class="link" href="/sign-in">Sign in</a> · <a class="link" href="/">Home</a></p>
+    <p>League office / bAIseball · <a class="link" href="mailto:jeremyjbowers@gmail.com">jeremyjbowers@gmail.com</a> · <a class="link" href={SITE_URL}>{SITE_URL}</a></p>
+    <p class="muted"><a class="link" href={PRIVACY_URL}>Privacy Policy</a> · <a class="link" href="/sign-in">Sign in</a> · <a class="link" href="/">Home</a></p>
   </div>
 </div>

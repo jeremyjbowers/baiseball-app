@@ -4,6 +4,7 @@
   import { setPending } from "../lib/pending.js";
   import Field from "../lib/Field.svelte";
   import SmsConsent from "../lib/SmsConsent.svelte";
+  import { PRIVACY_URL, TERMS_URL } from "../lib/site.js";
 
   let { expired = false } = $props();
   let channel = $state("email");
@@ -84,6 +85,6 @@
       {pending ? "Sending the link…" : channel === "sms" ? "Yes, text me a sign-in link" : "Email me a sign-in link"}
     </button>
     <p class="hint">If Mailgun or Twilio is not configured on this machine, the link is shown on the next screen. That confirmation is for local development only.</p>
-    <p class="hint"><a class="link" href="/terms/">Terms of Service</a> · <a class="link" href="/privacy/">Privacy Policy</a></p>
+    <p class="hint"><a class="link" href={TERMS_URL}>Terms of Service</a> · <a class="link" href={PRIVACY_URL}>Privacy Policy</a></p>
   </form>
 </div>
