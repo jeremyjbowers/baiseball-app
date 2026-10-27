@@ -1,3 +1,7 @@
+# baiseball-app
+
+the bAIseball application. The public site is [baiseball.app](https://baiseball.app).
+
 # Baseball engine
 
 One regular-season game. The crate is a library plus a `play` binary. A fixed lineup, fixture ratings, and a minimal computer manager play nine innings. The designated hitter is on, so pitchers do not hit. If the game is tied after nine, a runner starts on second. A postseason flag exists and leaves second empty.

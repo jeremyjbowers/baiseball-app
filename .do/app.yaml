@@ -1,9 +1,35 @@
-name: league-office
+name: baiseball
 region: nyc
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED
+domains:
+  - domain: baiseball.app
+    type: PRIMARY
+    wildcard: true
+ingress:
+  rules:
+    - component:
+        name: web
+      match:
+        authority:
+          exact: baiseball.app
+        path:
+          prefix: /
+    - component:
+        name: api
+      match:
+        authority:
+          exact: api.baiseball.app
+        path:
+          prefix: /
 services:
   - name: api
+    github:
+      repo: jeremyjbowers/baiseball-app
+      branch: main
+      deploy_on_push: true
     dockerfile_path: admin-api/Dockerfile
-    source_dir: admin-api
     http_port: 8080
     instance_count: 1
     instance_size_slug: apps-s-1vcpu-0.5gb
@@ -13,7 +39,7 @@ services:
         value: ${db.DATABASE_URL}
       - key: PUBLIC_APP_URL
         scope: RUN_TIME
-        value: ${web.PUBLIC_URL}
+        value: https://baiseball.app
       - key: OWNER_BOOTSTRAP_EMAIL
         scope: RUN_TIME
         value: jeremyjbowers@gmail.com
@@ -34,6 +60,10 @@ services:
         scope: RUN_TIME
 static_sites:
   - name: web
+    github:
+      repo: jeremyjbowers/baiseball-app
+      branch: main
+      deploy_on_push: true
     source_dir: web
     environment_slug: node-js
     build_command: npm ci && npm run build
@@ -42,7 +72,7 @@ static_sites:
     envs:
       - key: VITE_API_URL
         scope: BUILD_TIME
-        value: ${api.PUBLIC_URL}
+        value: https://api.baiseball.app
 databases:
   - name: db
     engine: PG
