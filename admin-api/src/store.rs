@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use chrono::{Duration, SecondsFormat, Utc};
 use rand::Rng;
 use serde_json::{json, Value};
 
 use crate::db::{Db, OptionalRow};
 use crate::error::{db_err, ApiError};
+use crate::roster::{self, Roster};
 use crate::schedule;
 use crate::validate::{self, object};
 
@@ -537,9 +540,7 @@ pub fn create_league(conn: &mut Db, viewer_id: &str, body: &Value) -> Result<Val
     if let Some(lock) = record.get("lineupLock") {
         let lock = validate::parse_lock(Some(lock))?;
         if lock != validate::lock_for_type(&league_type) {
-            return Err(ApiError::bad(
-                "Lineup lock follows the league type. ULMG locks by game. NPL locks by week.",
-            ));
+            return Err(ApiError::bad(validate::LOCK_FOLLOWS_TYPE));
         }
     }
     if record
@@ -551,15 +552,39 @@ pub fn create_league(conn: &mut Db, viewer_id: &str, body: &Value) -> Result<Val
             "Add the teams before naming rivalry opponents.",
         ));
     }
+    let roster = roster_from_record(record, "rosterCsv")?;
+    let viewer_email = if roster.is_some() {
+        email_for_owner(conn, viewer_id)?
+    } else {
+        String::new()
+    };
+    let owners = if let Some(roster) = roster.as_ref() {
+        roster_owner_ids(conn, &viewer_email, roster)?
+    } else {
+        HashMap::new()
+    };
     let lock = validate::lock_for_type(&league_type);
     let id = new_id();
     let timestamp = now_iso();
-    conn.execute(
+    let mut tx = conn.transaction().map_err(db_err)?;
+    tx.execute(
         "INSERT INTO leagues (id, name, lineup_lock, created_by, created_at, updated_at, league_type, season_length, division_games, outside_games)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         params!(id, name, lock, viewer_id, timestamp, timestamp, league_type, i64::from(season_length), i64::from(division_games), i64::from(outside_games)),
     )
     .map_err(db_err)?;
+    if let Some(roster) = roster.as_ref() {
+        write_roster(
+            &mut tx,
+            &viewer_email,
+            &id,
+            roster,
+            Some(division_games),
+            Some(outside_games),
+            &owners,
+        )?;
+    }
+    tx.commit().map_err(db_err)?;
     require_league(conn, &id)
 }
 
@@ -703,16 +728,12 @@ pub fn update_league(
         if let Some(sent) = record.get("lineupLock") {
             let sent = validate::parse_lock(Some(sent))?;
             if sent != derived {
-                return Err(ApiError::bad(
-                    "Lineup lock follows the league type. ULMG locks by game. NPL locks by week.",
-                ));
+                return Err(ApiError::bad(validate::LOCK_FOLLOWS_TYPE));
             }
         }
         derived.to_string()
     } else if record.contains_key("lineupLock") {
-        return Err(ApiError::bad(
-            "Lineup lock follows the league type. ULMG locks by game. NPL locks by week.",
-        ));
+        return Err(ApiError::bad(validate::LOCK_FOLLOWS_TYPE));
     } else {
         league["lineupLock"].as_str().unwrap_or("game").to_string()
     };
@@ -781,6 +802,11 @@ pub fn delete_league(conn: &mut Db, viewer_id: &str, league_id: &str) -> Result<
     .map_err(db_err)?;
     tx.execute(
         "DELETE FROM lineups WHERE team_id IN (SELECT id FROM teams WHERE league_id = $1)",
+        params!(league_id),
+    )
+    .map_err(db_err)?;
+    tx.execute(
+        "DELETE FROM team_managers WHERE team_id IN (SELECT id FROM teams WHERE league_id = $1)",
         params!(league_id),
     )
     .map_err(db_err)?;
@@ -973,28 +999,42 @@ struct TeamAccess {
 }
 
 fn load_team(conn: &mut Db, team_id: &str) -> Result<Option<TeamAccess>, ApiError> {
-    conn.query_row(
-        &format!("{TEAM_SQL} WHERE t.id = $1"),
-        params!(team_id),
-        |row| {
-            Ok(TeamAccess {
-                created_by: row.get(4)?,
-                team: map_team(row)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(db_err)
+    let found = conn
+        .query_row(
+            &format!("{TEAM_SQL} WHERE t.id = $1"),
+            params!(team_id),
+            |row| {
+                Ok(TeamAccess {
+                    created_by: row.get(4)?,
+                    team: map_team(row)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(db_err)?;
+    let Some(mut access) = found else {
+        return Ok(None);
+    };
+    access.team = attach_managers(conn, access.team)?;
+    Ok(Some(access))
+}
+
+fn viewer_manages(team: &Value, viewer_id: &str) -> bool {
+    team["managers"].as_array().is_some_and(|items| {
+        items
+            .iter()
+            .any(|item| item["id"].as_str() == Some(viewer_id))
+    }) || team["ownerId"].as_str() == Some(viewer_id)
 }
 
 fn can_see_team(conn: &mut Db, access: &TeamAccess, viewer_id: &str) -> Result<bool, ApiError> {
     Ok(is_admin(conn, viewer_id)?
         || access.created_by == viewer_id
-        || access.team["ownerId"].as_str() == Some(viewer_id))
+        || viewer_manages(&access.team, viewer_id))
 }
 
 fn can_edit_lineup(conn: &mut Db, access: &TeamAccess, viewer_id: &str) -> Result<bool, ApiError> {
-    Ok(is_admin(conn, viewer_id)? || access.team["ownerId"].as_str() == Some(viewer_id))
+    Ok(is_admin(conn, viewer_id)? || viewer_manages(&access.team, viewer_id))
 }
 
 pub fn list_league_teams(
@@ -1003,15 +1043,18 @@ pub fn list_league_teams(
     league_id: &str,
 ) -> Result<Vec<Value>, ApiError> {
     manage_league(conn, viewer_id, league_id)?;
-    let mut stmt = conn
-        .prepare(&format!(
-            "{TEAM_SQL} WHERE t.league_id = $1 ORDER BY t.name"
-        ))
-        .map_err(db_err)?;
-    let rows = stmt
-        .query_map(params!(league_id), map_team)
-        .map_err(db_err)?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(db_err)
+    let teams = {
+        let mut stmt = conn
+            .prepare(&format!(
+                "{TEAM_SQL} WHERE t.league_id = $1 ORDER BY t.name"
+            ))
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params!(league_id), map_team)
+            .map_err(db_err)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(db_err)?
+    };
+    finish_teams(conn, teams)
 }
 
 pub fn list_controlled(
@@ -1025,7 +1068,7 @@ pub fn list_controlled(
                 .map_err(db_err)?
         } else {
             conn.prepare(&format!(
-                "{TEAM_SQL} WHERE t.owner_id = $1 ORDER BY l.name, t.name"
+                "{TEAM_SQL} WHERE EXISTS (SELECT 1 FROM team_managers tm WHERE tm.team_id = t.id AND tm.owner_id = $1) ORDER BY l.name, t.name"
             ))
             .map_err(db_err)?
         };
@@ -1037,6 +1080,7 @@ pub fn list_controlled(
         };
         mapped.collect::<Result<Vec<_>, _>>().map_err(db_err)?
     };
+    let teams = finish_teams(conn, teams)?;
     let leagues = list_leagues(conn, viewer_id)?;
     Ok((teams, leagues))
 }
@@ -1067,21 +1111,11 @@ pub fn create_team(
     let name = validate::required_text(record.get("name"), "Team name")?;
     let home_park = validate::required_text(record.get("homePark"), "Home park")?;
     let division_id = validate::required_text(record.get("divisionId"), "Division")?;
-    let supplied = record
-        .get("ownerEmail")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-    let owner_email = if supplied.is_empty() {
-        conn.query_row(
-            "SELECT email FROM owners WHERE id = $1",
-            params!(viewer_id),
-            |row| row.get::<_, String>(0),
-        )
-        .map_err(db_err)?
-    } else {
-        validate::parse_email(record.get("ownerEmail"))?
+    let emails = match requested_manager_emails(record, true)? {
+        Some(emails) => emails,
+        None => vec![email_for_owner(conn, viewer_id)?],
     };
+    let owner_ids = resolve_owner_ids(conn, &emails)?;
     division_in_league(conn, league_id, &division_id)?;
     if conn
         .query_row(
@@ -1097,7 +1131,9 @@ pub fn create_team(
             "This league already has a team with that name.",
         ));
     }
-    let owner = upsert_owner(conn, &owner_email)?;
+    let Some(primary) = owner_ids.first().cloned() else {
+        return Err(ApiError::bad("Name at least one manager."));
+    };
     let id = new_id();
     let timestamp = now_iso();
     let mut tx = conn.transaction().map_err(db_err)?;
@@ -1114,9 +1150,10 @@ pub fn create_team(
     tx.execute(
         "INSERT INTO teams (id, league_id, division_id, owner_id, name, home_park, created_at, updated_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-        params!(id, league_id, division_id, owner.id, name, home_park, timestamp, timestamp),
+        params!(id, league_id, division_id, primary, name, home_park, timestamp, timestamp),
     )
     .map_err(db_err)?;
+    insert_manager_rows(&mut tx, &id, &owner_ids, &timestamp)?;
     tx.commit().map_err(db_err)?;
     let team = load_team(conn, &id)?.unwrap().team;
     let league = require_league(conn, league_id)?;
@@ -1179,17 +1216,22 @@ pub fn update_team(
         access.team["divisionId"].as_str().unwrap_or("").to_string()
     };
     let league_admin = is_admin(conn, viewer_id)? || access.created_by == viewer_id;
-    let owner_email = if record.contains_key("ownerEmail") {
-        let parsed = validate::parse_email(record.get("ownerEmail"))?;
-        if !league_admin && parsed != access.team["ownerEmail"].as_str().unwrap_or("") {
-            return Err(ApiError::forbidden(
-                "Only the league administrator can change who controls the team.",
-            ));
+    let existing_emails = manager_email_list(&access.team);
+    let replacement = match requested_manager_emails(record, false)? {
+        Some(emails) if emails != existing_emails => {
+            if !league_admin {
+                return Err(ApiError::forbidden(
+                    "Only the league administrator can change who manages the team.",
+                ));
+            }
+            Some(resolve_owner_ids(conn, &emails)?)
         }
-        parsed
-    } else {
-        access.team["ownerEmail"].as_str().unwrap_or("").to_string()
+        _ => None,
     };
+    let owner_id = replacement
+        .as_ref()
+        .map(|ids| ids[0].clone())
+        .unwrap_or_else(|| access.team["ownerId"].as_str().unwrap_or("").to_string());
     let league_id = access.team["leagueId"].as_str().unwrap_or("").to_string();
     division_in_league(conn, &league_id, &division_id)?;
     if conn
@@ -1206,12 +1248,22 @@ pub fn update_team(
             "This league already has a team with that name.",
         ));
     }
-    let owner = upsert_owner(conn, &owner_email)?;
-    conn.execute(
+    let timestamp = now_iso();
+    let mut tx = conn.transaction().map_err(db_err)?;
+    tx.execute(
         "UPDATE teams SET name = $1, home_park = $2, division_id = $3, owner_id = $4, updated_at = $5 WHERE id = $6",
-        params!(name, home_park, division_id, owner.id, now_iso(), team_id),
+        params!(name, home_park, division_id, owner_id, timestamp, team_id),
     )
     .map_err(db_err)?;
+    if let Some(ids) = replacement.as_ref() {
+        tx.execute(
+            "DELETE FROM team_managers WHERE team_id = $1",
+            params!(team_id),
+        )
+        .map_err(db_err)?;
+        insert_manager_rows(&mut tx, team_id, ids, &timestamp)?;
+    }
+    tx.commit().map_err(db_err)?;
     Ok(load_team(conn, team_id)?.unwrap().team)
 }
 
@@ -1253,6 +1305,11 @@ pub fn delete_team(conn: &mut Db, viewer_id: &str, team_id: &str) -> Result<(), 
     .map_err(db_err)?;
     tx.execute("DELETE FROM lineups WHERE team_id = $1", params!(team_id))
         .map_err(db_err)?;
+    tx.execute(
+        "DELETE FROM team_managers WHERE team_id = $1",
+        params!(team_id),
+    )
+    .map_err(db_err)?;
     tx.execute("DELETE FROM teams WHERE id = $1", params!(team_id))
         .map_err(db_err)?;
     tx.commit().map_err(db_err)?;
@@ -1348,7 +1405,7 @@ fn require_lineup_owner(
     }
     if !can_edit_lineup(conn, &access, viewer_id)? {
         return Err(ApiError::forbidden(
-            "Only the owner who controls this team can change its lineups.",
+            "Only a manager of this team can change its lineups.",
         ));
     }
     Ok(access)
@@ -1694,6 +1751,409 @@ pub fn build_schedule(conn: &mut Db, viewer_id: &str, league_id: &str) -> Result
     read_schedule(conn, viewer_id, league_id)
 }
 
+fn attach_managers(conn: &mut Db, mut team: Value) -> Result<Value, ApiError> {
+    let team_id = team["id"].as_str().unwrap_or("").to_string();
+    let managers = {
+        let mut stmt = conn
+            .prepare("SELECT o.id, o.email FROM team_managers tm JOIN owners o ON o.id = tm.owner_id WHERE tm.team_id = $1 ORDER BY tm.position, o.email")
+            .map_err(db_err)?;
+        let rows = stmt
+            .query_map(params!(team_id), |row| {
+                Ok(json!({
+                    "id": row.get::<_, String>(0)?,
+                    "email": row.get::<_, String>(1)?,
+                }))
+            })
+            .map_err(db_err)?;
+        let mut managers = Vec::new();
+        for row in rows {
+            managers.push(row.map_err(db_err)?);
+        }
+        managers
+    };
+    if managers.is_empty() {
+        let fallback = json!({
+            "id": team["ownerId"].clone(),
+            "email": team["ownerEmail"].clone(),
+        });
+        team["managers"] = json!([fallback]);
+    } else {
+        team["ownerId"] = managers[0]["id"].clone();
+        team["ownerEmail"] = managers[0]["email"].clone();
+        team["managers"] = Value::Array(managers);
+    }
+    Ok(team)
+}
+
+fn finish_teams(conn: &mut Db, teams: Vec<Value>) -> Result<Vec<Value>, ApiError> {
+    let mut done = Vec::with_capacity(teams.len());
+    for team in teams {
+        done.push(attach_managers(conn, team)?);
+    }
+    Ok(done)
+}
+
+fn manager_email_list(team: &Value) -> Vec<String> {
+    team["managers"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item["email"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn requested_manager_emails(
+    record: &serde_json::Map<String, Value>,
+    creating: bool,
+) -> Result<Option<Vec<String>>, ApiError> {
+    if record.contains_key("managerEmails") {
+        let emails = validate::parse_manager_emails(record.get("managerEmails"))?;
+        if emails.is_empty() {
+            if creating {
+                return Ok(None);
+            }
+            return Err(ApiError::bad("Name at least one manager."));
+        }
+        return Ok(Some(emails));
+    }
+    if record.contains_key("ownerEmail") {
+        let supplied = record
+            .get("ownerEmail")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if supplied.is_empty() {
+            if creating {
+                return Ok(None);
+            }
+            return Err(ApiError::bad("Name at least one manager."));
+        }
+        return Ok(Some(vec![validate::parse_email(record.get("ownerEmail"))?]));
+    }
+    Ok(None)
+}
+
+fn email_for_owner(conn: &mut Db, owner_id: &str) -> Result<String, ApiError> {
+    conn.query_row(
+        "SELECT email FROM owners WHERE id = $1",
+        params!(owner_id),
+        |row| row.get(0),
+    )
+    .map_err(db_err)
+}
+
+fn resolve_owner_ids(conn: &mut Db, emails: &[String]) -> Result<Vec<String>, ApiError> {
+    let mut ids = Vec::with_capacity(emails.len());
+    for email in emails {
+        ids.push(upsert_owner(conn, email)?.id);
+    }
+    Ok(ids)
+}
+
+fn insert_manager_rows(
+    tx: &mut crate::db::Tx<'_>,
+    team_id: &str,
+    owner_ids: &[String],
+    timestamp: &str,
+) -> Result<(), ApiError> {
+    for (index, owner_id) in owner_ids.iter().enumerate() {
+        let position = index as i64;
+        tx.execute(
+            "INSERT INTO team_managers (team_id, owner_id, position, created_at) VALUES ($1, $2, $3, $4)",
+            params!(team_id, owner_id, position, timestamp),
+        )
+        .map_err(db_err)?;
+    }
+    Ok(())
+}
+
+fn roster_from_record(
+    record: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<Roster>, ApiError> {
+    let Some(value) = record.get(key) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let Some(text) = value.as_str() else {
+        return Err(ApiError::bad("The roster file has to be CSV text."));
+    };
+    if text.trim().is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(roster::parse(text)?))
+}
+
+fn roster_owner_ids(
+    conn: &mut Db,
+    viewer_email: &str,
+    roster: &Roster,
+) -> Result<HashMap<String, String>, ApiError> {
+    let mut emails = vec![viewer_email.to_string()];
+    for team in &roster.teams {
+        for email in &team.managers {
+            if !emails.contains(email) {
+                emails.push(email.clone());
+            }
+        }
+    }
+    let mut owners = HashMap::new();
+    for email in emails {
+        let id = upsert_owner(conn, &email)?.id;
+        owners.insert(email, id);
+    }
+    Ok(owners)
+}
+
+struct KnownTeam {
+    id: String,
+    name: String,
+    division_id: String,
+}
+
+fn ordered_pair(left: &str, right: &str) -> (String, String) {
+    if left <= right {
+        (left.to_string(), right.to_string())
+    } else {
+        (right.to_string(), left.to_string())
+    }
+}
+
+fn find_known<'a>(
+    teams: &'a [KnownTeam],
+    name: &str,
+    line: usize,
+) -> Result<&'a KnownTeam, ApiError> {
+    let key = roster::fold_key(name);
+    let mut found = None;
+    for team in teams {
+        if roster::fold_key(&team.name) == key {
+            if found.is_some() {
+                return Err(ApiError::bad(format!(
+                    "Row {line}: {name} matches more than one team."
+                )));
+            }
+            found = Some(team);
+        }
+    }
+    found.ok_or_else(|| ApiError::bad(format!("Row {line}: {name} is not a team in this league.")))
+}
+
+fn write_roster(
+    tx: &mut crate::db::Tx<'_>,
+    viewer_email: &str,
+    league_id: &str,
+    roster: &Roster,
+    division_games: Option<u32>,
+    outside_games: Option<u32>,
+    owners: &HashMap<String, String>,
+) -> Result<(i64, i64), ApiError> {
+    let mut divisions: Vec<(String, String)> = tx
+        .query(
+            "SELECT id, name FROM divisions WHERE league_id = $1",
+            params!(league_id),
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(db_err)?;
+    let mut known: Vec<KnownTeam> = tx
+        .query(
+            "SELECT id, name, division_id FROM teams WHERE league_id = $1",
+            params!(league_id),
+            |row| {
+                Ok(KnownTeam {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    division_id: row.get(2)?,
+                })
+            },
+        )
+        .map_err(db_err)?;
+    let existing_rivalries: Vec<(String, String, u32)> = tx
+        .query(
+            "SELECT team_id, opponent_team_id, games FROM rivalries WHERE league_id = $1",
+            params!(league_id),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get::<_, i64>(2)? as u32)),
+        )
+        .map_err(db_err)?;
+    let projected = known.len() + roster.teams.len();
+    if projected > 30 {
+        return Err(ApiError::conflict(format!(
+            "This roster would put the league at {projected} teams. A league cannot have more than 30."
+        )));
+    }
+    let timestamp = now_iso();
+    let mut added_divisions = 0_i64;
+    let mut added_teams = 0_i64;
+    for row in &roster.teams {
+        if known
+            .iter()
+            .any(|team| roster::fold_key(&team.name) == roster::fold_key(&row.name))
+        {
+            return Err(ApiError::conflict(format!(
+                "Row {}: {} is already a team in this league.",
+                row.line, row.name
+            )));
+        }
+        let division_key = roster::fold_key(&row.division);
+        let existing_division = divisions
+            .iter()
+            .find(|(_, name)| roster::fold_key(name) == division_key)
+            .map(|(id, _)| id.clone());
+        let division_id = if let Some(id) = existing_division {
+            id
+        } else {
+            let id = new_id();
+            tx.execute(
+                "INSERT INTO divisions (id, league_id, name, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)",
+                params!(id, league_id, row.division, timestamp, timestamp),
+            )
+            .map_err(db_err)?;
+            divisions.push((id.clone(), row.division.clone()));
+            added_divisions += 1;
+            id
+        };
+        let emails = if row.managers.is_empty() {
+            vec![viewer_email.to_string()]
+        } else {
+            row.managers.clone()
+        };
+        let mut owner_ids = Vec::with_capacity(emails.len());
+        for email in &emails {
+            let Some(owner_id) = owners.get(email) else {
+                return Err(ApiError::internal());
+            };
+            owner_ids.push(owner_id.clone());
+        }
+        let team_id = new_id();
+        let primary = owner_ids[0].clone();
+        tx.execute(
+            "INSERT INTO teams (id, league_id, division_id, owner_id, name, home_park, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            params!(team_id, league_id, division_id, primary, row.name, row.home_park, timestamp, timestamp),
+        )
+        .map_err(db_err)?;
+        insert_manager_rows(tx, &team_id, &owner_ids, &timestamp)?;
+        known.push(KnownTeam {
+            id: team_id,
+            name: row.name.clone(),
+            division_id,
+        });
+        added_teams += 1;
+    }
+
+    let mut stored = HashMap::new();
+    for (left, right, games) in &existing_rivalries {
+        stored.insert(ordered_pair(left, right), *games);
+    }
+    let mut pending = HashMap::new();
+    for rivalry in &roster.rivalries {
+        let left = find_known(&known, &rivalry.team, rivalry.line)?;
+        let right = find_known(&known, &rivalry.opponent, rivalry.line)?;
+        if left.id == right.id {
+            return Err(ApiError::bad(format!(
+                "Row {}: {} cannot be its own rival.",
+                rivalry.line, left.name
+            )));
+        }
+        let left_id = left.id.clone();
+        let right_id = right.id.clone();
+        let key = ordered_pair(&left_id, &right_id);
+        if let Some(games) = stored.get(&key) {
+            if *games != rivalry.games {
+                return Err(ApiError::bad(format!(
+                    "Row {}: {} and {} are already rivals for {} games.",
+                    rivalry.line, rivalry.team, rivalry.opponent, games
+                )));
+            }
+            continue;
+        }
+        if let Some(games) = pending.get(&key) {
+            if *games != rivalry.games {
+                return Err(ApiError::bad(format!(
+                    "Row {}: {} and {} disagree on the rivalry games.",
+                    rivalry.line, rivalry.team, rivalry.opponent
+                )));
+            }
+            continue;
+        }
+        pending.insert(key, rivalry.games);
+    }
+    if !stored.is_empty() || !pending.is_empty() {
+        let (Some(inside), Some(outside)) = (division_games, outside_games) else {
+            return Err(ApiError::bad(
+                "Set the season length before naming rivalry opponents.",
+            ));
+        };
+        let mut all = Vec::new();
+        for ((team_id, opponent_id), games) in stored.iter().chain(pending.iter()) {
+            all.push(validate::RivalryInput {
+                team_id: team_id.clone(),
+                opponent_team_id: opponent_id.clone(),
+                games: *games,
+            });
+        }
+        let seated: Vec<(String, String)> = known
+            .iter()
+            .map(|team| (team.id.clone(), team.division_id.clone()))
+            .collect();
+        ensure_rivalries_fit(&seated, inside, outside, &all)?;
+    }
+    for ((team_id, opponent_id), games) in &pending {
+        let id = new_id();
+        let games = i64::from(*games);
+        tx.execute(
+            "INSERT INTO rivalries (id, league_id, team_id, opponent_team_id, games, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+            params!(id, league_id, team_id, opponent_id, games, timestamp),
+        )
+        .map_err(db_err)?;
+    }
+    Ok((added_divisions, added_teams))
+}
+
+pub fn import_roster(
+    conn: &mut Db,
+    viewer_id: &str,
+    league_id: &str,
+    body: &Value,
+) -> Result<Value, ApiError> {
+    let league = manage_league(conn, viewer_id, league_id)?;
+    let record = object(body)?;
+    let text = record
+        .get("csv")
+        .and_then(Value::as_str)
+        .or_else(|| record.get("rosterCsv").and_then(Value::as_str))
+        .filter(|text| !text.trim().is_empty())
+        .ok_or_else(|| ApiError::bad("Choose a roster CSV."))?;
+    let roster = roster::parse(text)?;
+    let viewer_email = email_for_owner(conn, viewer_id)?;
+    let owners = roster_owner_ids(conn, &viewer_email, &roster)?;
+    let division_games = json_count(&league["divisionGames"]);
+    let outside_games = json_count(&league["outsideGames"]);
+    let mut tx = conn.transaction().map_err(db_err)?;
+    let (added_divisions, added_teams) = write_roster(
+        &mut tx,
+        &viewer_email,
+        league_id,
+        &roster,
+        division_games,
+        outside_games,
+        &owners,
+    )?;
+    tx.commit().map_err(db_err)?;
+    let league = require_league(conn, league_id)?;
+    let teams = list_league_teams(conn, viewer_id, league_id)?;
+    Ok(json!({
+        "league": league,
+        "teams": teams,
+        "addedDivisions": added_divisions,
+        "addedTeams": added_teams,
+    }))
+}
+
 pub fn session_counts(conn: &mut Db, owner_id: &str) -> Result<(i64, i64), ApiError> {
     let leagues = count(
         conn,
@@ -1702,7 +2162,7 @@ pub fn session_counts(conn: &mut Db, owner_id: &str) -> Result<(i64, i64), ApiEr
     )?;
     let teams = count(
         conn,
-        "SELECT COUNT(*) FROM teams WHERE owner_id = $1",
+        "SELECT COUNT(DISTINCT team_id) FROM team_managers WHERE owner_id = $1",
         owner_id,
     )?;
     Ok((leagues, teams))
@@ -1875,5 +2335,93 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.message.contains("add up"), "{}", error.message);
+    }
+
+    #[test]
+    fn a_roster_file_creates_the_league_and_a_second_upload_does_not_duplicate_it() {
+        let mut conn = scratch();
+        let actor = owner_id(&mut conn);
+        let league = create_league(
+            &mut conn,
+            &actor,
+            &json!({
+                "name": "From file",
+                "leagueType": "ulmg",
+                "seasonLength": 6,
+                "divisionGames": 4,
+                "outsideGames": 2,
+                "rosterCsv": include_str!("../../web/public/league-roster-template.csv")
+            }),
+        )
+        .unwrap();
+        assert_eq!(league["teamCount"], 4);
+        assert_eq!(league["divisionCount"], 2);
+        assert_eq!(league["rivalries"].as_array().unwrap().len(), 1);
+        let league_id = league["id"].as_str().unwrap();
+        let teams = list_league_teams(&mut conn, &actor, league_id).unwrap();
+        let harbor = teams.iter().find(|team| team["name"] == "Harbor").unwrap();
+        let emails: Vec<&str> = harbor["managers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|manager| manager["email"].as_str())
+            .collect();
+        assert_eq!(emails, ["ada@league.test", "bea@league.test"]);
+        let bea = upsert_owner(&mut conn, "bea@league.test").unwrap();
+        let visible = list_controlled(&mut conn, &bea.id).unwrap().0;
+        assert!(visible.iter().any(|team| team["name"] == "Harbor"));
+        let page = get_team_page(&mut conn, &bea.id, harbor["id"].as_str().unwrap()).unwrap();
+        assert_eq!(page["canEditLineups"], true);
+        let updated = update_team(
+            &mut conn,
+            &actor,
+            harbor["id"].as_str().unwrap(),
+            &json!({
+                "managerEmails": ["ada@league.test", "bea@league.test", "cy@league.test"]
+            }),
+        )
+        .unwrap();
+        assert_eq!(updated["managers"].as_array().unwrap().len(), 3);
+        let again = import_roster(
+            &mut conn,
+            &actor,
+            league_id,
+            &json!({ "csv": include_str!("../../web/public/league-roster-template.csv") }),
+        )
+        .unwrap_err();
+        assert!(
+            again.message.contains("already a team"),
+            "{}",
+            again.message
+        );
+        let still = require_league(&mut conn, league_id).unwrap();
+        assert_eq!(still["teamCount"], 4);
+
+        let rejected = create_league(
+            &mut conn,
+            &actor,
+            &json!({
+                "name": "Rivalry too big",
+                "leagueType": "ulmg",
+                "seasonLength": 2,
+                "divisionGames": 2,
+                "outsideGames": 0,
+                "rosterCsv": "division,team,home_park,rivalries\nEast,Harbor,Park,Wharf:4\nEast,Wharf,Park,\n"
+            }),
+        )
+        .unwrap_err();
+        assert!(
+            rejected.message.contains("inside the division"),
+            "{}",
+            rejected.message
+        );
+        let leftover: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM leagues WHERE name = $1",
+                params!("Rivalry too big"),
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(leftover, 0);
     }
 }

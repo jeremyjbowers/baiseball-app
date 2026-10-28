@@ -130,6 +130,19 @@ impl Tx<'_> {
     pub fn commit(self) -> Result<(), postgres::Error> {
         self.inner.commit()
     }
+
+    pub fn query<T, F>(
+        &mut self,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+        mut map: F,
+    ) -> Result<Vec<T>, postgres::Error>
+    where
+        F: FnMut(&Row<'_>) -> Result<T, postgres::Error>,
+    {
+        let rows = self.inner.query(sql, params)?;
+        rows.iter().map(|row| map(&Row(row))).collect()
+    }
 }
 
 pub fn database_url() -> String {
@@ -276,6 +289,13 @@ fn migrate(conn: &mut Db) -> Result<(), ApiError> {
           rivalry BIGINT NOT NULL,
           created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS team_managers (
+          team_id TEXT NOT NULL REFERENCES teams(id),
+          owner_id TEXT NOT NULL REFERENCES owners(id),
+          position BIGINT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (team_id, owner_id)
+        );
         ",
     )
     .map_err(db_err)?;
@@ -298,6 +318,17 @@ fn migrate(conn: &mut Db) -> Result<(), ApiError> {
         )
         .map_err(db_err)?;
     }
+    conn.batch(
+        "
+        INSERT INTO team_managers (team_id, owner_id, position, created_at)
+        SELECT t.id, t.owner_id, 0, t.created_at
+        FROM teams t
+        WHERE NOT EXISTS (
+          SELECT 1 FROM team_managers tm WHERE tm.team_id = t.id
+        );
+        ",
+    )
+    .map_err(db_err)?;
     Ok(())
 }
 

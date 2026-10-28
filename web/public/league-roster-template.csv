@@ -1,0 +1,5 @@
+division,team,home_park,managers,rivalries
+East,Harbor,Camden Yards,ada@league.test;bea@league.test,Wharf:4
+East,Wharf,Fenway Park,cy@league.test,Harbor:4
+West,Mesa,Dodger Stadium,dee@league.test,
+West,Dunes,Oracle Park,,

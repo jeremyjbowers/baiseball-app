@@ -2,6 +2,7 @@ mod db;
 mod error;
 mod http;
 mod notify;
+mod roster;
 mod schedule;
 mod store;
 mod validate;
@@ -85,6 +86,7 @@ async fn serve(state: AppState, addr: SocketAddr, web_origin: String) {
             "/leagues/:league_id/teams",
             get(http::list_league_teams).post(http::create_team),
         )
+        .route("/leagues/:league_id/roster", post(http::import_roster))
         .route(
             "/leagues/:league_id/schedule",
             get(http::read_schedule).post(http::build_schedule),

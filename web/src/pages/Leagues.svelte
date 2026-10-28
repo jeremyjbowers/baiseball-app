@@ -27,7 +27,7 @@
   <div class="spread">
     <div>
       <h1>Leagues</h1>
-      <p class="muted">A league holds divisions, teams, lineups, and a schedule. ULMG plays one game at a time, a season behind. NPL simulates a week and mixes current and past stats. You name the leagues and the divisions.</p>
+      <p class="muted">A league holds divisions, teams, lineups, and a schedule. like strat-o-matic plays one game at a time, a season behind. like scoresheet simulates a week and mixes current and past stats. You name the leagues and the divisions.</p>
     </div>
     <a class="button" href="/leagues/new">Create a league</a>
   </div>
