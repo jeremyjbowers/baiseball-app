@@ -29,7 +29,7 @@ export async function api(path, options = {}) {
   const signingIn = path === "/auth/magic-links" || (path === "/auth/sessions" && options.method === "POST");
   if (response.status === 401 && !signingIn) {
     clearSession();
-    if (window.location.pathname !== "/") navigate("/");
+    if (!window.location.pathname.startsWith("/sign-in")) navigate("/sign-in");
     throw new Error(body.error || "Sign in to continue.");
   }
   if (!response.ok) {

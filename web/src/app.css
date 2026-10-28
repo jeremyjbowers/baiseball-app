@@ -177,6 +177,37 @@ legend {
 
 .choice span { display: grid; gap: 0.15rem; }
 
+.sms-consent { margin-top: 0.25rem; }
+
+.sms-disclosure {
+  display: grid;
+  gap: 0.55rem;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #f3ecdf;
+  padding: 0.85rem 0.95rem;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.sms-disclosure p { margin: 0; }
+
+.legal h2 { margin-top: 0.35rem; }
+.legal p { margin: 0; }
+
+.home { gap: 1.25rem; padding-bottom: 1rem; }
+.hero { padding: 1.5rem 0 0.5rem; max-width: 40rem; }
+.eyebrow {
+  margin: 0;
+  color: var(--cardinal);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 0.85rem;
+}
+.lede { margin: 0; font-size: 1.15rem; color: var(--muted); max-width: 36rem; }
+.home-foot { margin: 0.5rem 0 0; }
+
 .counts, .rivalry-form, .manager-row { display: grid; gap: 0.75rem; }
 
 .schedule-head, .schedule-row {

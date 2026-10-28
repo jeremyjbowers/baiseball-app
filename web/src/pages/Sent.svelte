@@ -11,7 +11,7 @@
     <div class="empty stack">
       <h1>No sign-in link in this browser</h1>
       <p class="muted">Request another link from the sign-in page.</p>
-      <a class="button" href="/">Back to sign in</a>
+      <a class="button" href="/sign-in">Back to sign in</a>
     </div>
   {:else if issued.devOnly && issued.magicLink}
     <div class="card stack">
@@ -29,13 +29,18 @@
       </div>
       <a class="button" href={issued.magicLink}>Open the sign-in link</a>
       <p class="hint">The link expires {formatWhen(issued.expiresAt)}. It works once.</p>
-      <a class="link" href="/">Use a different address</a>
+      <a class="link" href="/sign-in">Use a different address</a>
     </div>
   {:else}
     <div class="card stack">
       <h1>{byText ? "Check your phone" : "Check your email"}</h1>
       <p class="muted">A sign-in link was sent to {issued.destination}. It works once and expires {formatWhen(issued.expiresAt)}.</p>
-      <a class="link" href="/">Use a different address</a>
+      {#if byText}
+        <div class="sms-disclosure" role="note">
+          <p><strong>Msg &amp; data rates may apply.</strong> Reply <strong>STOP</strong> to opt out of League office texts. Reply <strong>HELP</strong> for help.</p>
+        </div>
+      {/if}
+      <a class="link" href="/sign-in">Use a different address</a>
     </div>
   {/if}
 </div>

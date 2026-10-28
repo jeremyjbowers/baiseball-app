@@ -22,7 +22,7 @@
       navigate("/leagues");
     } catch (caught) {
       error = caught instanceof Error ? caught.message : "That sign-in link is expired or already used.";
-      navigate("/?link=expired");
+      navigate("/sign-in?link=expired");
     }
   });
 </script>
