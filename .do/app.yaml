@@ -1,69 +1,72 @@
-name: baiseball
+name: league-office
 region: nyc
 alerts:
   - rule: DEPLOYMENT_FAILED
   - rule: DOMAIN_FAILED
 domains:
-  - domain: baiseball.app
+  - domain: league-office.app
     type: PRIMARY
-    wildcard: true
+  - domain: api.league-office.app
+    type: ALIAS
 ingress:
   rules:
-    - component:
-        name: web
-      match:
-        authority:
-          exact: baiseball.app
-        path:
-          prefix: /
     - component:
         name: api
       match:
         authority:
-          exact: api.baiseball.app
+          exact: api.league-office.app
+        path:
+          prefix: /
+    - component:
+        name: web
+      match:
+        authority:
+          exact: league-office.app
+        path:
+          prefix: /
+    - component:
+        name: web
+      match:
         path:
           prefix: /
 services:
   - name: api
-    github:
-      repo: jeremyjbowers/baiseball-app
+    # Prefer github + deploy_on_push once the DigitalOcean GitHub app
+    # can see jeremyjbowers/baiseball-app. Until then the live app uses
+    # this public git clone URL and .github/workflows/deploy-digitalocean.yml
+    # creates a deployment on every push to main.
+    git:
+      repo_clone_url: https://github.com/jeremyjbowers/baiseball-app.git
       branch: main
-      deploy_on_push: true
     dockerfile_path: admin-api/Dockerfile
     http_port: 8080
     instance_count: 1
     instance_size_slug: apps-s-1vcpu-0.5gb
+    health_check:
+      initial_delay_seconds: 15
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 12
+      http_path: /health
     envs:
       - key: DATABASE_URL
         scope: RUN_TIME
         value: ${db.DATABASE_URL}
+      - key: DATABASE_CA_CERT
+        scope: RUN_TIME
+        value: ${db.CA_CERT}
       - key: PUBLIC_APP_URL
         scope: RUN_TIME
-        value: https://baiseball.app
+        value: https://league-office.app
       - key: OWNER_BOOTSTRAP_EMAIL
         scope: RUN_TIME
         value: jeremyjbowers@gmail.com
-      - key: MAILGUN_API_KEY
-        scope: RUN_TIME
-        type: SECRET
-      - key: MAILGUN_DOMAIN
-        scope: RUN_TIME
-      - key: MAILGUN_FROM
-        scope: RUN_TIME
-      - key: TWILIO_ACCOUNT_SID
-        scope: RUN_TIME
-        type: SECRET
-      - key: TWILIO_AUTH_TOKEN
-        scope: RUN_TIME
-        type: SECRET
-      - key: TWILIO_FROM
-        scope: RUN_TIME
 static_sites:
   - name: web
-    github:
-      repo: jeremyjbowers/baiseball-app
+    git:
+      repo_clone_url: https://github.com/jeremyjbowers/baiseball-app.git
       branch: main
-      deploy_on_push: true
     source_dir: web
     environment_slug: node-js
     build_command: npm ci && npm run build
@@ -72,9 +75,26 @@ static_sites:
     envs:
       - key: VITE_API_URL
         scope: BUILD_TIME
-        value: https://api.baiseball.app
+        value: https://api.league-office.app
 databases:
   - name: db
     engine: PG
     version: "16"
     production: true
+    cluster_name: baiseball-pg
+envs:
+  - key: MAILGUN_API_KEY
+    scope: RUN_AND_BUILD_TIME
+    type: SECRET
+  - key: MAILGUN_DOMAIN
+    scope: RUN_AND_BUILD_TIME
+  - key: AWS_ACCESS_KEY
+    scope: RUN_AND_BUILD_TIME
+  - key: AWS_SECRET_ACCESS_KEY
+    scope: RUN_AND_BUILD_TIME
+    type: SECRET
+  - key: TWILIO_SID
+    scope: RUN_AND_BUILD_TIME
+  - key: TWILIO_CLIENT_SECRET
+    scope: RUN_AND_BUILD_TIME
+    type: SECRET

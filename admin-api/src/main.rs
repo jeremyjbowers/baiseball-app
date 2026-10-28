@@ -64,6 +64,7 @@ async fn serve(state: AppState, addr: SocketAddr, web_origin: String) {
         .allow_headers(Any);
 
     let app = Router::new()
+        .route("/health", get(http::health))
         .route("/auth/magic-links", post(http::magic_link))
         .route("/auth/sessions", post(http::exchange).delete(http::logout))
         .route("/auth/session", get(http::current_session))

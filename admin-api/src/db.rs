@@ -1,4 +1,5 @@
 use openssl::ssl::{SslConnector, SslMethod};
+use openssl::x509::X509;
 use postgres::types::{FromSql, ToSql};
 use postgres::{Client, NoTls, Transaction};
 use postgres_openssl::MakeTlsConnector;
@@ -154,10 +155,16 @@ pub fn connect(url: &str) -> Result<Db, ApiError> {
         || url.contains("sslmode=verify-ca")
         || url.contains("sslmode=verify-full");
     let client = if wants_tls {
-        let builder = SslConnector::builder(SslMethod::tls()).map_err(|err| {
+        let mut builder = SslConnector::builder(SslMethod::tls()).map_err(|err| {
             eprintln!("tls: {err}");
             ApiError::internal()
         })?;
+        if let Ok(pem) = std::env::var("DATABASE_CA_CERT") {
+            install_database_ca(&mut builder, &pem).map_err(|err| {
+                eprintln!("database ca: {err}");
+                ApiError::internal()
+            })?;
+        }
         let tls = MakeTlsConnector::new(builder.build());
         Client::connect(url, tls).map_err(db_err)?
     } else {
@@ -167,6 +174,30 @@ pub fn connect(url: &str) -> Result<Db, ApiError> {
         client,
         test_schema: None,
     })
+}
+
+fn install_database_ca(
+    builder: &mut openssl::ssl::SslConnectorBuilder,
+    pem: &str,
+) -> Result<(), openssl::error::ErrorStack> {
+    let normalized = normalize_pem(pem);
+    if normalized.trim().is_empty() {
+        return Ok(());
+    }
+    let certs = X509::stack_from_pem(normalized.as_bytes())?;
+    for cert in certs {
+        builder.cert_store_mut().add_cert(cert)?;
+    }
+    Ok(())
+}
+
+fn normalize_pem(pem: &str) -> String {
+    let trimmed = pem.trim().trim_matches('"');
+    if trimmed.contains('\\') && !trimmed.contains('\n') {
+        trimmed.replace("\\n", "\n")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 pub fn open() -> Result<Db, ApiError> {
@@ -415,6 +446,56 @@ fn has_column(conn: &mut Db, table: &str, column: &str) -> Result<bool, ApiError
         )
         .map_err(db_err)?;
     Ok(found > 0)
+}
+
+#[cfg(test)]
+mod ca_tests {
+    use openssl::asn1::{Asn1Integer, Asn1Time};
+    use openssl::bn::BigNum;
+    use openssl::hash::MessageDigest;
+    use openssl::nid::Nid;
+    use openssl::pkey::PKey;
+    use openssl::rsa::Rsa;
+    use openssl::ssl::{SslConnector, SslMethod};
+    use openssl::x509::{X509NameBuilder, X509};
+
+    use super::install_database_ca;
+
+    fn self_signed_pem() -> String {
+        let key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        let mut name = X509NameBuilder::new().unwrap();
+        name.append_entry_by_nid(Nid::COMMONNAME, "baiseball-test")
+            .unwrap();
+        let name = name.build();
+        let mut builder = X509::builder().unwrap();
+        builder.set_version(2).unwrap();
+        let serial = Asn1Integer::from_bn(&BigNum::from_u32(1).unwrap()).unwrap();
+        builder.set_serial_number(&serial).unwrap();
+        builder.set_subject_name(&name).unwrap();
+        builder.set_issuer_name(&name).unwrap();
+        builder.set_pubkey(&key).unwrap();
+        builder
+            .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        builder
+            .set_not_after(&Asn1Time::days_from_now(7).unwrap())
+            .unwrap();
+        builder.sign(&key, MessageDigest::sha256()).unwrap();
+        String::from_utf8(builder.build().to_pem().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn installs_a_pem_ca_and_escaped_newlines() {
+        let escaped = self_signed_pem().replace('\n', "\\n");
+        let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+        install_database_ca(&mut builder, &escaped).unwrap();
+    }
+
+    #[test]
+    fn ignores_a_blank_ca() {
+        let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+        install_database_ca(&mut builder, "   ").unwrap();
+    }
 }
 
 #[cfg(test)]
