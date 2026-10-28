@@ -56,12 +56,12 @@ function pairCount(games, left, right, rivalryOnly) {
   }).length;
 }
 
-async function divisionAndTeams(leagueId, groups) {
+async function divisionAndTeams(leagueId, groups, subleagueName = "National League") {
   const ids = {};
   for (const [divisionName, teamNames] of Object.entries(groups)) {
     const division = await send(`/leagues/${leagueId}/divisions`, {
       method: "POST",
-      body: { name: divisionName },
+      body: { name: divisionName, subleagueName },
     });
     assert(division.status === 201, `${divisionName} ${division.status} ${JSON.stringify(division.json)}`);
     ids[divisionName] = [];
@@ -208,7 +208,7 @@ const narrow = await send("/leagues", {
   body: { name: `Narrow ${stamp}`, leagueType: "ulmg", seasonLength: 2, divisionGames: 2, outsideGames: 0 },
 });
 const narrowId = narrow.json.league.id;
-const only = await send(`/leagues/${narrowId}/divisions`, { method: "POST", body: { name: "Only" } });
+const only = await send(`/leagues/${narrowId}/divisions`, { method: "POST", body: { name: "Only", subleagueName: "National League" } });
 for (const name of ["One", "Two", "Three"]) {
   const added = await send(`/leagues/${narrowId}/teams`, {
     method: "POST",
@@ -241,11 +241,11 @@ const lineupRead = await send(`/lineups/${lineup.json.lineup.id}`);
 assert(lineupRead.status === 200 && lineupRead.json.canEditLineups === true, "lineup read");
 
 const rosterCsv = [
-  "division,team,home_park,managers,rivalries",
-  `East,Harbor,Camden Yards,ada-${stamp}@league.test;bea-${stamp}@league.test,Wharf:4`,
-  `East,Wharf,Fenway Park,cy-${stamp}@league.test,Harbor:4`,
-  `West,Mesa,"Oracle Park, San Francisco",dee-${stamp}@league.test,`,
-  "West,Dunes,Oracle Park,,",
+  "league,division,team,home_park,managers,rivalries",
+  `National League,West,Harbor Hawks,Camden Yards,ada-${stamp}@league.test;bea-${stamp}@league.test,Wharf Cats:4`,
+  `National League,West,Wharf Cats,Fenway Park,cy-${stamp}@league.test,Harbor Hawks:4`,
+  `American League,East,Mesa Suns,"Oracle Park, San Francisco",dee-${stamp}@league.test,`,
+  "American League,East,Dune Foxes,Oracle Park,,",
 ].join("\n");
 const roster = await send("/leagues", {
   method: "POST",
@@ -258,13 +258,13 @@ const roster = await send("/leagues", {
     rosterCsv,
   },
 });
-assert(roster.status === 201 && roster.json.league.teamCount === 4 && roster.json.league.divisionCount === 2, `roster ${roster.status} ${JSON.stringify(roster.json)}`);
+assert(roster.status === 201 && roster.json.league.teamCount === 4 && roster.json.league.divisionCount === 2 && roster.json.league.subleagueCount === 2, `roster ${roster.status} ${JSON.stringify(roster.json)}`);
 assert(roster.json.league.rivalries.length === 1 && roster.json.league.rivalries[0].games === 4, "roster rivalry");
 const rosterTeams = await send(`/leagues/${roster.json.league.id}/teams`);
-const harbor = rosterTeams.json.teams.find((team) => team.name === "Harbor");
-assert(harbor && harbor.managers.length === 2, `harbor managers ${JSON.stringify(harbor)}`);
-const mesa = rosterTeams.json.teams.find((team) => team.name === "Mesa");
-assert(mesa && mesa.homePark === "Oracle Park, San Francisco", "quoted park");
+const harbor = rosterTeams.json.teams.find((team) => team.name === "Harbor Hawks");
+assert(harbor && harbor.managers.length === 2 && harbor.subleagueName === "National League", `harbor managers ${JSON.stringify(harbor)}`);
+const mesa = rosterTeams.json.teams.find((team) => team.name === "Mesa Suns");
+assert(mesa && mesa.homePark === "Oracle Park, San Francisco" && mesa.subleagueName === "American League", "quoted park");
 const patched = await send(`/teams/${harbor.id}`, {
   method: "PATCH",
   body: { managerEmails: [`ada-${stamp}@league.test`, `bea-${stamp}@league.test`, `cy-${stamp}@league.test`] },

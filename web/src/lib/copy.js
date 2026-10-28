@@ -101,6 +101,18 @@ export function managerLine(team) {
   return team?.ownerEmail || "";
 }
 
+export function seatLabel(teamOrDivision) {
+  const league = teamOrDivision?.subleagueName || "";
+  const division = teamOrDivision?.divisionName || teamOrDivision?.name || "";
+  if (league && division) return `${league} · ${division}`;
+  return league || division || "";
+}
+
+export function divisionOptionLabel(division) {
+  if (division?.subleagueName) return `${division.subleagueName} / ${division.name}`;
+  return division?.name || "";
+}
+
 export function positionLabel(value) {
   return POSITIONS.find((position) => position.value === value)?.label ?? value;
 }

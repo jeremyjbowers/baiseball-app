@@ -79,6 +79,10 @@ async fn serve(state: AppState, addr: SocketAddr, web_origin: String) {
                 .delete(http::delete_league),
         )
         .route(
+            "/leagues/:league_id/subleagues",
+            get(http::list_subleagues).post(http::create_subleague),
+        )
+        .route(
             "/leagues/:league_id/divisions",
             get(http::list_divisions).post(http::create_division),
         )
@@ -90,6 +94,12 @@ async fn serve(state: AppState, addr: SocketAddr, web_origin: String) {
         .route(
             "/leagues/:league_id/schedule",
             get(http::read_schedule).post(http::build_schedule),
+        )
+        .route(
+            "/subleagues/:subleague_id",
+            get(http::get_subleague)
+                .patch(http::update_subleague)
+                .delete(http::delete_subleague),
         )
         .route(
             "/divisions/:division_id",
