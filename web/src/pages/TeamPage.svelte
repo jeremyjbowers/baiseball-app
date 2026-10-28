@@ -1,7 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import { api } from "../lib/api.js";
-  import { lockDetail, positionLabel } from "../lib/copy.js";
+  import { divisionOptionLabel, lockDetail, positionLabel } from "../lib/copy.js";
   import { navigate } from "../lib/nav.js";
   import Confirm from "../lib/Confirm.svelte";
   import Field from "../lib/Field.svelte";
@@ -92,7 +92,7 @@
       <Field id="edit-team-name" label="Team name"><input id="edit-team-name" bind:value={name} /></Field>
       <Field id="edit-division" label="Division">
         <select id="edit-division" bind:value={divisionId}>
-          {#each data.divisions as division (division.id)}<option value={division.id}>{division.name}</option>{/each}
+          {#each data.divisions as division (division.id)}<option value={division.id}>{divisionOptionLabel(division)}</option>{/each}
         </select>
       </Field>
       <Field id="edit-home-park" label="Home park" hint="The park this team plays in at home."><input id="edit-home-park" bind:value={homePark} /></Field>

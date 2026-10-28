@@ -1,4 +1,4 @@
-//! Roster CSV. One row is one team. Divisions are created from the division column.
+//! Roster CSV. One row is one team. League / division / team are created from the columns.
 
 use std::collections::{HashMap, HashSet};
 
@@ -10,6 +10,7 @@ use crate::validate::{self, MAX_SEASON_GAMES};
 #[derive(Debug)]
 pub struct RosterTeam {
     pub line: usize,
+    pub subleague: String,
     pub division: String,
     pub name: String,
     pub home_park: String,
@@ -55,6 +56,9 @@ pub fn parse(text: &str) -> Result<Roster, ApiError> {
             )));
         }
     }
+    let Some(&league_index) = columns.get("league") else {
+        return Err(missing_header());
+    };
     let Some(&division_index) = columns.get("division") else {
         return Err(missing_header());
     };
@@ -71,6 +75,7 @@ pub fn parse(text: &str) -> Result<Roster, ApiError> {
     let mut seen_names = HashSet::new();
     let mut pending = Vec::new();
     for (line, row) in records.iter().skip(1) {
+        let subleague = text_field(*line, "League name", cell_at(row, Some(league_index)))?;
         let division = text_field(*line, "Division name", cell_at(row, Some(division_index)))?;
         let name = text_field(*line, "Team name", cell_at(row, Some(team_index)))?;
         let home_park = text_field(*line, "Home park", cell_at(row, Some(park_index)))?;
@@ -85,6 +90,7 @@ pub fn parse(text: &str) -> Result<Roster, ApiError> {
         }
         teams.push(RosterTeam {
             line: *line,
+            subleague,
             division,
             name,
             home_park,
@@ -104,13 +110,14 @@ pub fn parse(text: &str) -> Result<Roster, ApiError> {
 
 fn missing_header() -> ApiError {
     ApiError::bad(
-        "The roster needs a header row with division, team, and home_park. managers and rivalries are optional. Download the template and keep that header.",
+        "The roster needs a header row with league, division, team, and home_park. managers and rivalries are optional. Download the template and keep that header.",
     )
 }
 
 fn canonical_header(raw: &str) -> Option<&'static str> {
     let key = fold_key(raw).replace(' ', "_").replace('-', "_");
     match key.as_str() {
+        "league" | "league_name" | "subleague" | "sub_league" => Some("league"),
         "division" | "division_name" => Some("division"),
         "team" | "team_name" => Some("team"),
         "home_park" | "homepark" | "park" => Some("home_park"),
@@ -339,40 +346,50 @@ mod tests {
             roster.teams[0].managers,
             ["ada@league.test", "bea@league.test"]
         );
+        assert_eq!(roster.teams[0].subleague, "National League");
+        assert_eq!(roster.teams[0].division, "West");
+        assert_eq!(roster.teams[2].subleague, "American League");
         assert_eq!(roster.teams[3].managers.len(), 0);
-        assert_eq!(roster.teams[3].name, "Dunes");
+        assert_eq!(roster.teams[3].name, "Dune Foxes");
         assert_eq!(roster.rivalries.len(), 1);
         assert_eq!(roster.rivalries[0].games, 4);
-        assert_eq!(fold_key(&roster.rivalries[0].team), "harbor");
-        assert_eq!(fold_key(&roster.rivalries[0].opponent), "wharf");
+        assert_eq!(fold_key(&roster.rivalries[0].team), "harbor hawks");
+        assert_eq!(fold_key(&roster.rivalries[0].opponent), "wharf cats");
     }
 
     #[test]
     fn quoted_park_names_and_blank_lines_parse() {
-        let roster = parse("\u{feff}division,team,home_park,managers\r\nEast,Harbor,\"Oracle Park, San Francisco\",ada@league.test\r\n\r\n").unwrap();
+        let roster = parse("\u{feff}league,division,team,home_park,managers\r\nNational League,West,Harbor,\"Oracle Park, San Francisco\",ada@league.test\r\n\r\n").unwrap();
         assert_eq!(roster.teams.len(), 1);
         assert_eq!(roster.teams[0].home_park, "Oracle Park, San Francisco");
     }
 
     #[test]
     fn missing_header_disagreement_and_duplicate_team_are_row_errors() {
-        let missing = parse("team,home_park\nHarbor,Park\n").unwrap_err();
+        let missing = parse("division,team,home_park\nEast,Harbor,Park\n").unwrap_err();
         assert!(missing.message.contains("header"), "{}", missing.message);
-        let duplicate =
-            parse("division,team,home_park\nEast,Harbor,Park\nEast,Harbor,Other\n").unwrap_err();
+        let duplicate = parse(
+            "league,division,team,home_park\nNational League,West,Harbor,Park\nNational League,West,Harbor,Other\n",
+        )
+        .unwrap_err();
         assert!(
             duplicate.message.contains("listed more than once"),
             "{}",
             duplicate.message
         );
-        let disagree = parse("division,team,home_park,rivalries\nEast,Harbor,Park,Wharf:4\nEast,Wharf,Park,Harbor:6\n").unwrap_err();
+        let disagree = parse(
+            "league,division,team,home_park,rivalries\nNational League,West,Harbor,Park,Wharf:4\nNational League,West,Wharf,Park,Harbor:6\n",
+        )
+        .unwrap_err();
         assert!(
             disagree.message.contains("disagree"),
             "{}",
             disagree.message
         );
-        let bad_email =
-            parse("division,team,home_park,managers\nEast,Harbor,Park,not-an-email\n").unwrap_err();
+        let bad_email = parse(
+            "league,division,team,home_park,managers\nNational League,West,Harbor,Park,not-an-email\n",
+        )
+        .unwrap_err();
         assert!(
             bad_email.message.contains("not an email"),
             "{}",

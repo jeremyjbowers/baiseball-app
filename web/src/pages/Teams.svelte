@@ -1,7 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import { api } from "../lib/api.js";
-  import { lockDetail, managerLine } from "../lib/copy.js";
+  import { divisionOptionLabel, lockDetail, managerLine, seatLabel } from "../lib/copy.js";
   import { navigate } from "../lib/nav.js";
   import Field from "../lib/Field.svelte";
   import ManagersField from "../lib/ManagersField.svelte";
@@ -76,7 +76,7 @@
     {#each teams as team (team.id)}
       <article class="card stack">
         <h2><a class="link" href="/teams/{team.id}">{team.name}</a></h2>
-        <p>{team.leagueName} · {team.divisionName}</p>
+        <p>{team.leagueName} · {seatLabel(team)}</p>
         <p>Home park: {team.homePark}</p>
         <p>Managers: {managerLine(team)}</p>
         <p class="muted">{lockDetail(team.lineupLock)}</p>
@@ -100,7 +100,7 @@
       {:else}
         <Field id="create-division" label="Division">
           <select id="create-division" value={divisionId} onchange={(event) => { chosenDivision = event.currentTarget.value; }}>
-            {#each league?.divisions ?? [] as division (division.id)}<option value={division.id}>{division.name}</option>{/each}
+            {#each league?.divisions ?? [] as division (division.id)}<option value={division.id}>{divisionOptionLabel(division)}</option>{/each}
           </select>
         </Field>
       {/if}

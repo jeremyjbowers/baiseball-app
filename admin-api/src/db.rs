@@ -1,5 +1,3 @@
-use rand::Rng;
-
 use openssl::ssl::{SslConnector, SslMethod};
 use postgres::types::{FromSql, ToSql};
 use postgres::{Client, NoTls, Transaction};
@@ -236,13 +234,21 @@ fn migrate(conn: &mut Db) -> Result<(), ApiError> {
           division_games BIGINT,
           outside_games BIGINT
         );
-        CREATE TABLE IF NOT EXISTS divisions (
+        CREATE TABLE IF NOT EXISTS subleagues (
           id TEXT PRIMARY KEY,
           league_id TEXT NOT NULL REFERENCES leagues(id),
           name TEXT NOT NULL,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           UNIQUE (league_id, name)
+        );
+        CREATE TABLE IF NOT EXISTS divisions (
+          id TEXT PRIMARY KEY,
+          league_id TEXT NOT NULL REFERENCES leagues(id),
+          subleague_id TEXT REFERENCES subleagues(id),
+          name TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS teams (
           id TEXT PRIMARY KEY,
@@ -329,7 +335,72 @@ fn migrate(conn: &mut Db) -> Result<(), ApiError> {
         ",
     )
     .map_err(db_err)?;
+    if !has_column(conn, "divisions", "subleague_id")? {
+        conn.batch("ALTER TABLE divisions ADD COLUMN subleague_id TEXT REFERENCES subleagues(id);")
+            .map_err(db_err)?;
+    }
+    backfill_subleagues(conn)?;
     Ok(())
+}
+
+fn backfill_subleagues(conn: &mut Db) -> Result<(), ApiError> {
+    conn.batch(
+        "
+        INSERT INTO subleagues (id, league_id, name, created_at, updated_at)
+        SELECT
+          'legacy-' || l.id,
+          l.id,
+          'League',
+          COALESCE(
+            (SELECT MIN(d.created_at) FROM divisions d WHERE d.league_id = l.id),
+            to_char(timezone('utc', now()), 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')
+          ),
+          COALESCE(
+            (SELECT MIN(d.created_at) FROM divisions d WHERE d.league_id = l.id),
+            to_char(timezone('utc', now()), 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')
+          )
+        FROM leagues l
+        WHERE EXISTS (
+          SELECT 1 FROM divisions d WHERE d.league_id = l.id AND d.subleague_id IS NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM subleagues s WHERE s.league_id = l.id AND lower(s.name) = 'league'
+        );
+
+        UPDATE divisions d
+        SET subleague_id = s.id
+        FROM subleagues s
+        WHERE d.league_id = s.league_id
+          AND lower(s.name) = 'league'
+          AND d.subleague_id IS NULL;
+        ",
+    )
+    .map_err(db_err)?;
+    if has_constraint(conn, "divisions", "divisions_league_id_name_key")? {
+        conn.batch("ALTER TABLE divisions DROP CONSTRAINT divisions_league_id_name_key;")
+            .map_err(db_err)?;
+    }
+    if !has_constraint(conn, "divisions", "divisions_subleague_id_name_key")? {
+        conn.batch(
+            "ALTER TABLE divisions ADD CONSTRAINT divisions_subleague_id_name_key UNIQUE (subleague_id, name);",
+        )
+        .map_err(db_err)?;
+    }
+    Ok(())
+}
+
+fn has_constraint(conn: &mut Db, table: &str, constraint: &str) -> Result<bool, ApiError> {
+    let found = conn
+        .query_row(
+            "SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_schema = current_schema() AND table_name = $1 AND constraint_name = $2",
+            &[
+                &table as &(dyn postgres::types::ToSql + Sync),
+                &constraint as &(dyn postgres::types::ToSql + Sync),
+            ],
+            |row| row.get::<usize, i64>(0),
+        )
+        .map_err(db_err)?;
+    Ok(found > 0)
 }
 
 fn has_column(conn: &mut Db, table: &str, column: &str) -> Result<bool, ApiError> {
@@ -348,6 +419,7 @@ fn has_column(conn: &mut Db, table: &str, column: &str) -> Result<bool, ApiError
 
 #[cfg(test)]
 fn random_schema() -> String {
+    use rand::Rng;
     let mut buffer = [0u8; 8];
     rand::thread_rng().fill(&mut buffer);
     buffer.iter().map(|byte| format!("{byte:02x}")).collect()

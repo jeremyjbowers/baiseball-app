@@ -1,7 +1,7 @@
 <script>
   import { onMount } from "svelte";
   import { api } from "../lib/api.js";
-  import { countNote, managerLine, typeDetail } from "../lib/copy.js";
+  import { countNote, divisionOptionLabel, managerLine, seatLabel, typeDetail } from "../lib/copy.js";
   import { navigate } from "../lib/nav.js";
   import Confirm from "../lib/Confirm.svelte";
   import Field from "../lib/Field.svelte";
@@ -24,7 +24,10 @@
   let rivalA = $state("");
   let rivalB = $state("");
   let rivalGames = $state("");
+  let subleagueName = $state("");
+  let subleagueDrafts = $state({});
   let divisionName = $state("");
+  let divisionSubleagueId = $state("");
   let divisionDrafts = $state({});
   let teamName = $state("");
   let divisionId = $state("");
@@ -39,7 +42,11 @@
   function apply(payload, quiet) {
     league = payload.league;
     teams = payload.teams;
+    subleagueDrafts = Object.fromEntries((payload.league.subleagues ?? []).map((item) => [item.id, item.name]));
     divisionDrafts = Object.fromEntries(payload.league.divisions.map((division) => [division.id, division.name]));
+    if (!(payload.league.subleagues ?? []).some((item) => item.id === divisionSubleagueId)) {
+      divisionSubleagueId = payload.league.subleagues?.[0]?.id ?? "";
+    }
     if (!payload.league.divisions.some((division) => division.id === divisionId)) {
       divisionId = payload.league.divisions[0]?.id ?? "";
     }
@@ -162,7 +169,7 @@
     </div>
     <p class:danger={!league.inBounds}>{league.boundLabel}</p>
     <p class="muted">{typeDetail(league.leagueType)}</p>
-    <p class="muted">Division size is not fixed. like strat-o-matic is often 16 teams in four divisions. like scoresheet is often 24 teams in six divisions. Those counts are examples. 26 and 28 team counts are closed.</p>
+    <p class="muted">Teams sit in a league and a division. like strat-o-matic is often 16 teams in four divisions. like scoresheet is often 24 teams in six divisions. Those counts are examples. 26 and 28 team counts are closed.</p>
     {#if formError}<div class="alert error" role="alert"><strong>Could not save</strong><p>{formError}</p></div>{/if}
     {#if notice}<div class="alert" role="status"><p>{notice}</p></div>{/if}
 
@@ -220,49 +227,85 @@
     </form>
 
     <section class="stack">
-      <h2>Divisions</h2>
-      {#if league.divisions.length === 0}
-        <div class="empty"><h3>No divisions yet</h3><p class="muted">A team has to sit in a division. Add one before you add a team.</p></div>
+      <h2>Leagues and divisions</h2>
+      <p class="muted">A team sits in a league and a division, for example National League, West. Both National League and American League can have a West division.</p>
+      {#if (league.subleagues ?? []).length === 0}
+        <div class="empty"><h3>No leagues yet</h3><p class="muted">Add National League or American League, then add a division under it before you add a team.</p></div>
       {/if}
-      {#each league.divisions as division (division.id)}
+      {#each league.subleagues ?? [] as subleague (subleague.id)}
         <div class="panel stack">
-          <form class="form-inline" onsubmit={(event) => { event.preventDefault(); run(`division-${division.id}`, async () => {
-            await api(`/divisions/${division.id}`, { method: "PATCH", body: JSON.stringify({ name: divisionDrafts[division.id] ?? division.name }) });
+          <form class="form-inline" onsubmit={(event) => { event.preventDefault(); run(`subleague-${subleague.id}`, async () => {
+            await api(`/subleagues/${subleague.id}`, { method: "PATCH", body: JSON.stringify({ name: subleagueDrafts[subleague.id] ?? subleague.name }) });
             await load(true);
           }); }}>
-            <Field id="division-{division.id}" label="Division name">
-              <input id="division-{division.id}" value={divisionDrafts[division.id] ?? division.name} oninput={(event) => { divisionDrafts = { ...divisionDrafts, [division.id]: event.currentTarget.value }; }} />
+            <Field id="subleague-{subleague.id}" label="League name">
+              <input id="subleague-{subleague.id}" value={subleagueDrafts[subleague.id] ?? subleague.name} oninput={(event) => { subleagueDrafts = { ...subleagueDrafts, [subleague.id]: event.currentTarget.value }; }} />
             </Field>
-            <button class="secondary" type="submit" disabled={pending === `division-${division.id}`}>{pending === `division-${division.id}` ? "Saving…" : "Save name"}</button>
+            <button class="secondary" type="submit" disabled={pending === `subleague-${subleague.id}`}>{pending === `subleague-${subleague.id}` ? "Saving…" : "Save name"}</button>
           </form>
+          {#each league.divisions.filter((division) => division.subleagueId === subleague.id) as division (division.id)}
+            <form class="form-inline" onsubmit={(event) => { event.preventDefault(); run(`division-${division.id}`, async () => {
+              await api(`/divisions/${division.id}`, { method: "PATCH", body: JSON.stringify({ name: divisionDrafts[division.id] ?? division.name }) });
+              await load(true);
+            }); }}>
+              <Field id="division-{division.id}" label="Division name">
+                <input id="division-{division.id}" value={divisionDrafts[division.id] ?? division.name} oninput={(event) => { divisionDrafts = { ...divisionDrafts, [division.id]: event.currentTarget.value }; }} />
+              </Field>
+              <button class="secondary" type="submit" disabled={pending === `division-${division.id}`}>{pending === `division-${division.id}` ? "Saving…" : "Save name"}</button>
+            </form>
+            <Confirm
+              label="Delete division"
+              title={`Delete ${division.name}?`}
+              description="Teams have to leave this division first. Deleting the office league removes the division with its teams."
+              confirmLabel="Delete division"
+              onConfirm={async () => { await api(`/divisions/${division.id}`, { method: "DELETE" }); await load(true); }}
+            />
+          {/each}
           <Confirm
-            label="Delete division"
-            title={`Delete ${division.name}?`}
-            description="Teams have to leave this division first. Deleting the league removes the division with its teams."
-            confirmLabel="Delete division"
-            onConfirm={async () => { await api(`/divisions/${division.id}`, { method: "DELETE" }); await load(true); }}
+            label="Delete league"
+            title={`Delete ${subleague.name}?`}
+            description="Divisions have to leave this league first. Deleting the office league removes it with its divisions and teams."
+            confirmLabel="Delete league"
+            onConfirm={async () => { await api(`/subleagues/${subleague.id}`, { method: "DELETE" }); await load(true); }}
           />
         </div>
       {/each}
-      <form class="panel form-inline" onsubmit={(event) => { event.preventDefault(); run("new-division", async () => {
-        await api(`/leagues/${league.id}/divisions`, { method: "POST", body: JSON.stringify({ name: divisionName }) });
-        divisionName = "";
+      <form class="panel form-inline" onsubmit={(event) => { event.preventDefault(); run("new-subleague", async () => {
+        await api(`/leagues/${league.id}/subleagues`, { method: "POST", body: JSON.stringify({ name: subleagueName }) });
+        subleagueName = "";
         await load(true);
       }); }}>
-        <Field id="new-division" label="New division"><input id="new-division" bind:value={divisionName} /></Field>
-        <button type="submit" disabled={pending === "new-division"}>{pending === "new-division" ? "Adding…" : "Add division"}</button>
+        <Field id="new-subleague" label="New league" hint="National League or American League.">
+          <input id="new-subleague" bind:value={subleagueName} />
+        </Field>
+        <button type="submit" disabled={pending === "new-subleague"}>{pending === "new-subleague" ? "Adding…" : "Add league"}</button>
       </form>
+      {#if (league.subleagues ?? []).length > 0}
+        <form class="panel form-inline" onsubmit={(event) => { event.preventDefault(); run("new-division", async () => {
+          await api(`/leagues/${league.id}/divisions`, { method: "POST", body: JSON.stringify({ name: divisionName, subleagueId: divisionSubleagueId }) });
+          divisionName = "";
+          await load(true);
+        }); }}>
+          <Field id="new-division-league" label="League">
+            <select id="new-division-league" bind:value={divisionSubleagueId}>
+              {#each league.subleagues as item (item.id)}<option value={item.id}>{item.name}</option>{/each}
+            </select>
+          </Field>
+          <Field id="new-division" label="New division"><input id="new-division" bind:value={divisionName} /></Field>
+          <button type="submit" disabled={pending === "new-division"}>{pending === "new-division" ? "Adding…" : "Add division"}</button>
+        </form>
+      {/if}
     </section>
 
     <section class="stack">
       <h2>Teams</h2>
       {#if teams.length === 0}
-        <div class="empty"><h3>No teams yet</h3><p class="muted">A team has a name, a division, a home park, and one or more managers. Leave managers blank and the office holds the team. Sign-in is not on, so this office can edit the lineup.</p></div>
+        <div class="empty"><h3>No teams yet</h3><p class="muted">A team has a name, a league, a division, a home park, and one or more managers. Leave managers blank and the office holds the team. Sign-in is not on, so this office can edit the lineup.</p></div>
       {/if}
       {#each teams as team (team.id)}
         <article class="card stack">
           <h3><a class="link" href="/teams/{team.id}">{team.name}</a></h3>
-          <p>{team.divisionName}</p>
+          <p>{seatLabel(team)}</p>
           <p>Home park: {team.homePark}</p>
           <p>Managers: {managerLine(team)}</p>
           <p class="muted">{team.lineupCount} {team.lineupCount === 1 ? "lineup" : "lineups"}</p>
@@ -283,11 +326,14 @@
           teamName: rivalry.teamName,
           opponentTeamName: rivalry.opponentTeamName,
         }));
+        const nested = Number(payload.addedSubleagues ?? 0);
         const divisions = Number(payload.addedDivisions ?? 0);
         const added = Number(payload.addedTeams ?? 0);
-        const divisionText = divisions === 1 ? "1 division" : `${divisions} divisions`;
-        const teamText = added === 1 ? "1 team" : `${added} teams`;
-        notice = divisions > 0 ? `Added ${divisionText} and ${teamText}.` : `Added ${teamText}.`;
+        const parts = [];
+        if (nested > 0) parts.push(nested === 1 ? "1 league" : `${nested} leagues`);
+        if (divisions > 0) parts.push(divisions === 1 ? "1 division" : `${divisions} divisions`);
+        parts.push(added === 1 ? "1 team" : `${added} teams`);
+        notice = `Added ${parts.join(", ")}.`;
         rosterCsv = "";
         rosterName = "";
       }); }}>
@@ -297,7 +343,7 @@
       {#if league.teamCount >= 30}
         <p class="danger">This league already has 30 teams.</p>
       {:else if league.divisions.length === 0}
-        <p class="muted">Add a division before adding a team.</p>
+        <p class="muted">Add a league and a division before adding a team.</p>
       {:else}
         <form class="panel stack" onsubmit={(event) => { event.preventDefault(); run("new-team", async () => {
           const managers = managerEmails.map((email) => email.trim()).filter(Boolean);
@@ -313,7 +359,7 @@
           <Field id="team-name" label="Team name"><input id="team-name" bind:value={teamName} /></Field>
           <Field id="team-division" label="Division">
             <select id="team-division" bind:value={divisionId}>
-              {#each league.divisions as division (division.id)}<option value={division.id}>{division.name}</option>{/each}
+              {#each league.divisions as division (division.id)}<option value={division.id}>{divisionOptionLabel(division)}</option>{/each}
             </select>
           </Field>
           <Field id="home-park" label="Home park" hint="The park this team plays in at home."><input id="home-park" bind:value={homePark} /></Field>
@@ -330,7 +376,7 @@
     <Confirm
       label="Delete league"
       title={`Delete ${league.name}?`}
-      description="This removes the league, its divisions, its teams, their lineups, and the schedule."
+      description="This removes the office league, its leagues, its divisions, its teams, their lineups, and the schedule."
       confirmLabel="Delete league"
       onConfirm={async () => { await api(`/leagues/${league.id}`, { method: "DELETE" }); navigate("/leagues"); }}
     />
