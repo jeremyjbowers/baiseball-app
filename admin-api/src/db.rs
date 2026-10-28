@@ -1,4 +1,4 @@
-use openssl::ssl::{SslConnector, SslMethod};
+use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres::types::{FromSql, ToSql};
 use postgres::{Client, NoTls, Transaction};
@@ -145,25 +145,45 @@ impl Tx<'_> {
 }
 
 pub fn database_url() -> String {
-    std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        "postgres://league:league@127.0.0.1:5432/league_office?sslmode=disable".to_string()
-    })
+    for key in [
+        "DATABASE_URL",
+        "DATABASE_CONNECTION_STRING",
+        // Typo alias: the live App Platform env was created as STRONG.
+        "DATABASE_CONNECTION_STRONG",
+    ] {
+        if let Ok(url) = std::env::var(key) {
+            let url = url.trim().to_string();
+            if !url.is_empty() {
+                return url;
+            }
+        }
+    }
+    "postgres://league:league@127.0.0.1:5432/league_office?sslmode=disable".to_string()
 }
 
 pub fn connect(url: &str) -> Result<Db, ApiError> {
-    let wants_tls = url.contains("sslmode=require")
-        || url.contains("sslmode=verify-ca")
-        || url.contains("sslmode=verify-full");
+    let verify_ca = url.contains("sslmode=verify-ca") || url.contains("sslmode=verify-full");
+    let wants_tls = verify_ca || url.contains("sslmode=require");
     let client = if wants_tls {
         let mut builder = SslConnector::builder(SslMethod::tls()).map_err(|err| {
             eprintln!("tls: {err}");
             ApiError::internal()
         })?;
-        if let Ok(pem) = std::env::var("DATABASE_CA_CERT") {
-            install_database_ca(&mut builder, &pem).map_err(|err| {
-                eprintln!("database ca: {err}");
-                ApiError::internal()
-            })?;
+        let ca_pem = std::env::var("DATABASE_CA_CERT").unwrap_or_default();
+        let installed_ca = install_database_ca(&mut builder, &ca_pem).map_err(|err| {
+            eprintln!("database ca: {err}");
+            ApiError::internal()
+        })?;
+        // libpq: sslmode=require encrypts but does not verify the server cert.
+        // DigitalOcean's managed Postgres CA is sometimes empty via ${db.CA_CERT},
+        // so require must not depend on a CA being present.
+        if verify_ca {
+            if !installed_ca {
+                eprintln!("database ca: sslmode requests verification but DATABASE_CA_CERT is empty");
+                return Err(ApiError::internal());
+            }
+        } else {
+            builder.set_verify(SslVerifyMode::NONE);
         }
         let tls = MakeTlsConnector::new(builder.build());
         Client::connect(url, tls).map_err(db_err)?
@@ -179,16 +199,19 @@ pub fn connect(url: &str) -> Result<Db, ApiError> {
 fn install_database_ca(
     builder: &mut openssl::ssl::SslConnectorBuilder,
     pem: &str,
-) -> Result<(), openssl::error::ErrorStack> {
+) -> Result<bool, openssl::error::ErrorStack> {
     let normalized = normalize_pem(pem);
     if normalized.trim().is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     let certs = X509::stack_from_pem(normalized.as_bytes())?;
+    if certs.is_empty() {
+        return Ok(false);
+    }
     for cert in certs {
         builder.cert_store_mut().add_cert(cert)?;
     }
-    Ok(())
+    Ok(true)
 }
 
 fn normalize_pem(pem: &str) -> String {
@@ -488,13 +511,38 @@ mod ca_tests {
     fn installs_a_pem_ca_and_escaped_newlines() {
         let escaped = self_signed_pem().replace('\n', "\\n");
         let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-        install_database_ca(&mut builder, &escaped).unwrap();
+        assert!(install_database_ca(&mut builder, &escaped).unwrap());
     }
 
     #[test]
     fn ignores_a_blank_ca() {
         let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-        install_database_ca(&mut builder, "   ").unwrap();
+        assert!(!install_database_ca(&mut builder, "   ").unwrap());
+    }
+}
+
+#[cfg(test)]
+mod database_url_tests {
+    use super::database_url;
+
+    #[test]
+    fn prefers_database_url_over_connection_string_aliases() {
+        std::env::set_var("DATABASE_URL", "postgres://from-url/db?sslmode=require");
+        std::env::set_var(
+            "DATABASE_CONNECTION_STRING",
+            "postgres://from-string/db?sslmode=require",
+        );
+        std::env::set_var(
+            "DATABASE_CONNECTION_STRONG",
+            "postgres://from-strong/db?sslmode=require",
+        );
+        assert_eq!(
+            database_url(),
+            "postgres://from-url/db?sslmode=require"
+        );
+        std::env::remove_var("DATABASE_URL");
+        std::env::remove_var("DATABASE_CONNECTION_STRING");
+        std::env::remove_var("DATABASE_CONNECTION_STRONG");
     }
 }
 

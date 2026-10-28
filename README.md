@@ -54,7 +54,7 @@ cd admin-api
 cargo run
 ```
 
-The API listens on `0.0.0.0:41742`. It reads `DATABASE_URL`. When that is unset, it uses a local Postgres database at `postgres://league:league@127.0.0.1:5432/league_office?sslmode=disable`. `compose.yaml` is the other way to run Postgres, on port 41743. Set `PUBLIC_APP_URL` and `OWNER_BOOTSTRAP_EMAIL` before `cargo run`. See `.do/app.yaml` for the App Platform services.
+The API listens on `0.0.0.0:41742`. It reads `DATABASE_URL`, then `DATABASE_CONNECTION_STRING` (or the typo alias `DATABASE_CONNECTION_STRONG`). When those are unset, it uses a local Postgres database at `postgres://league:league@127.0.0.1:5432/league_office?sslmode=disable`. `compose.yaml` is the other way to run Postgres, on port 41743. Set `PUBLIC_APP_URL` and `OWNER_BOOTSTRAP_EMAIL` before `cargo run`. See `.do/app.yaml` for the App Platform services.
 
 ### DigitalOcean
 
@@ -70,7 +70,7 @@ Manual deploy:
 doctl apps create-deployment 652d5b1a-d4aa-4e0b-b41a-780b0c7fdebd --force-rebuild
 ```
 
-The API loads `DATABASE_CA_CERT` (from `${db.CA_CERT}` on App Platform) when connecting with `sslmode=require`.
+For `sslmode=require`, the API encrypts the Postgres session and does not verify the server certificate (libpq behavior). For `sslmode=verify-ca` / `verify-full`, set `DATABASE_CA_CERT` (App Platform `${db.CA_CERT}`).
 
 ```bash
 cd web
