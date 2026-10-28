@@ -1,4 +1,4 @@
-name: baiseball
+name: league-office
 region: nyc
 alerts:
   - rule: DEPLOYMENT_FAILED
@@ -31,6 +31,10 @@ ingress:
           prefix: /
 services:
   - name: api
+    # Prefer github + deploy_on_push once the DigitalOcean GitHub app
+    # can see jeremyjbowers/baiseball-app. Until then the live app uses
+    # this public git clone URL and .github/workflows/deploy-digitalocean.yml
+    # creates a deployment on every push to main.
     git:
       repo_clone_url: https://github.com/jeremyjbowers/baiseball-app.git
       branch: main
@@ -81,3 +85,19 @@ databases:
     version: "16"
     production: true
     cluster_name: baiseball-pg
+envs:
+  - key: MAILGUN_API_KEY
+    scope: RUN_AND_BUILD_TIME
+    type: SECRET
+  - key: MAILGUN_DOMAIN
+    scope: RUN_AND_BUILD_TIME
+  - key: AWS_ACCESS_KEY
+    scope: RUN_AND_BUILD_TIME
+  - key: AWS_SECRET_ACCESS_KEY
+    scope: RUN_AND_BUILD_TIME
+    type: SECRET
+  - key: TWILIO_SID
+    scope: RUN_AND_BUILD_TIME
+  - key: TWILIO_CLIENT_SECRET
+    scope: RUN_AND_BUILD_TIME
+    type: SECRET

@@ -1,6 +1,4 @@
-use rand::Rng;
-
-use openssl::ssl::{SslConnector, SslMethod};
+use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres::types::{FromSql, ToSql};
 use postgres::{Client, NoTls, Transaction};
@@ -131,28 +129,61 @@ impl Tx<'_> {
     pub fn commit(self) -> Result<(), postgres::Error> {
         self.inner.commit()
     }
+
+    pub fn query<T, F>(
+        &mut self,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+        mut map: F,
+    ) -> Result<Vec<T>, postgres::Error>
+    where
+        F: FnMut(&Row<'_>) -> Result<T, postgres::Error>,
+    {
+        let rows = self.inner.query(sql, params)?;
+        rows.iter().map(|row| map(&Row(row))).collect()
+    }
 }
 
 pub fn database_url() -> String {
-    std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        "postgres://league:league@127.0.0.1:5432/league_office?sslmode=disable".to_string()
-    })
+    for key in [
+        "DATABASE_URL",
+        "DATABASE_CONNECTION_STRING",
+        // Typo alias: the live App Platform env was created as STRONG.
+        "DATABASE_CONNECTION_STRONG",
+    ] {
+        if let Ok(url) = std::env::var(key) {
+            let url = url.trim().to_string();
+            if !url.is_empty() {
+                return url;
+            }
+        }
+    }
+    "postgres://league:league@127.0.0.1:5432/league_office?sslmode=disable".to_string()
 }
 
 pub fn connect(url: &str) -> Result<Db, ApiError> {
-    let wants_tls = url.contains("sslmode=require")
-        || url.contains("sslmode=verify-ca")
-        || url.contains("sslmode=verify-full");
+    let verify_ca = url.contains("sslmode=verify-ca") || url.contains("sslmode=verify-full");
+    let wants_tls = verify_ca || url.contains("sslmode=require");
     let client = if wants_tls {
         let mut builder = SslConnector::builder(SslMethod::tls()).map_err(|err| {
             eprintln!("tls: {err}");
             ApiError::internal()
         })?;
-        if let Ok(pem) = std::env::var("DATABASE_CA_CERT") {
-            install_database_ca(&mut builder, &pem).map_err(|err| {
-                eprintln!("database ca: {err}");
-                ApiError::internal()
-            })?;
+        let ca_pem = std::env::var("DATABASE_CA_CERT").unwrap_or_default();
+        let installed_ca = install_database_ca(&mut builder, &ca_pem).map_err(|err| {
+            eprintln!("database ca: {err}");
+            ApiError::internal()
+        })?;
+        // libpq: sslmode=require encrypts but does not verify the server cert.
+        // DigitalOcean's managed Postgres CA is sometimes empty via ${db.CA_CERT},
+        // so require must not depend on a CA being present.
+        if verify_ca {
+            if !installed_ca {
+                eprintln!("database ca: sslmode requests verification but DATABASE_CA_CERT is empty");
+                return Err(ApiError::internal());
+            }
+        } else {
+            builder.set_verify(SslVerifyMode::NONE);
         }
         let tls = MakeTlsConnector::new(builder.build());
         Client::connect(url, tls).map_err(db_err)?
@@ -168,16 +199,19 @@ pub fn connect(url: &str) -> Result<Db, ApiError> {
 fn install_database_ca(
     builder: &mut openssl::ssl::SslConnectorBuilder,
     pem: &str,
-) -> Result<(), openssl::error::ErrorStack> {
+) -> Result<bool, openssl::error::ErrorStack> {
     let normalized = normalize_pem(pem);
     if normalized.trim().is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     let certs = X509::stack_from_pem(normalized.as_bytes())?;
+    if certs.is_empty() {
+        return Ok(false);
+    }
     for cert in certs {
         builder.cert_store_mut().add_cert(cert)?;
     }
-    Ok(())
+    Ok(true)
 }
 
 fn normalize_pem(pem: &str) -> String {
@@ -254,13 +288,21 @@ fn migrate(conn: &mut Db) -> Result<(), ApiError> {
           division_games BIGINT,
           outside_games BIGINT
         );
-        CREATE TABLE IF NOT EXISTS divisions (
+        CREATE TABLE IF NOT EXISTS subleagues (
           id TEXT PRIMARY KEY,
           league_id TEXT NOT NULL REFERENCES leagues(id),
           name TEXT NOT NULL,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           UNIQUE (league_id, name)
+        );
+        CREATE TABLE IF NOT EXISTS divisions (
+          id TEXT PRIMARY KEY,
+          league_id TEXT NOT NULL REFERENCES leagues(id),
+          subleague_id TEXT REFERENCES subleagues(id),
+          name TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS teams (
           id TEXT PRIMARY KEY,
@@ -307,6 +349,13 @@ fn migrate(conn: &mut Db) -> Result<(), ApiError> {
           rivalry BIGINT NOT NULL,
           created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS team_managers (
+          team_id TEXT NOT NULL REFERENCES teams(id),
+          owner_id TEXT NOT NULL REFERENCES owners(id),
+          position BIGINT NOT NULL,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (team_id, owner_id)
+        );
         ",
     )
     .map_err(db_err)?;
@@ -333,7 +382,83 @@ fn migrate(conn: &mut Db) -> Result<(), ApiError> {
         )
         .map_err(db_err)?;
     }
+    conn.batch(
+        "
+        INSERT INTO team_managers (team_id, owner_id, position, created_at)
+        SELECT t.id, t.owner_id, 0, t.created_at
+        FROM teams t
+        WHERE NOT EXISTS (
+          SELECT 1 FROM team_managers tm WHERE tm.team_id = t.id
+        );
+        ",
+    )
+    .map_err(db_err)?;
+    if !has_column(conn, "divisions", "subleague_id")? {
+        conn.batch("ALTER TABLE divisions ADD COLUMN subleague_id TEXT REFERENCES subleagues(id);")
+            .map_err(db_err)?;
+    }
+    backfill_subleagues(conn)?;
     Ok(())
+}
+
+fn backfill_subleagues(conn: &mut Db) -> Result<(), ApiError> {
+    conn.batch(
+        "
+        INSERT INTO subleagues (id, league_id, name, created_at, updated_at)
+        SELECT
+          'legacy-' || l.id,
+          l.id,
+          'League',
+          COALESCE(
+            (SELECT MIN(d.created_at) FROM divisions d WHERE d.league_id = l.id),
+            to_char(timezone('utc', now()), 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')
+          ),
+          COALESCE(
+            (SELECT MIN(d.created_at) FROM divisions d WHERE d.league_id = l.id),
+            to_char(timezone('utc', now()), 'YYYY-MM-DD\"T\"HH24:MI:SS.MS\"Z\"')
+          )
+        FROM leagues l
+        WHERE EXISTS (
+          SELECT 1 FROM divisions d WHERE d.league_id = l.id AND d.subleague_id IS NULL
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM subleagues s WHERE s.league_id = l.id AND lower(s.name) = 'league'
+        );
+
+        UPDATE divisions d
+        SET subleague_id = s.id
+        FROM subleagues s
+        WHERE d.league_id = s.league_id
+          AND lower(s.name) = 'league'
+          AND d.subleague_id IS NULL;
+        ",
+    )
+    .map_err(db_err)?;
+    if has_constraint(conn, "divisions", "divisions_league_id_name_key")? {
+        conn.batch("ALTER TABLE divisions DROP CONSTRAINT divisions_league_id_name_key;")
+            .map_err(db_err)?;
+    }
+    if !has_constraint(conn, "divisions", "divisions_subleague_id_name_key")? {
+        conn.batch(
+            "ALTER TABLE divisions ADD CONSTRAINT divisions_subleague_id_name_key UNIQUE (subleague_id, name);",
+        )
+        .map_err(db_err)?;
+    }
+    Ok(())
+}
+
+fn has_constraint(conn: &mut Db, table: &str, constraint: &str) -> Result<bool, ApiError> {
+    let found = conn
+        .query_row(
+            "SELECT COUNT(*) FROM information_schema.table_constraints WHERE table_schema = current_schema() AND table_name = $1 AND constraint_name = $2",
+            &[
+                &table as &(dyn postgres::types::ToSql + Sync),
+                &constraint as &(dyn postgres::types::ToSql + Sync),
+            ],
+            |row| row.get::<usize, i64>(0),
+        )
+        .map_err(db_err)?;
+    Ok(found > 0)
 }
 
 fn has_column(conn: &mut Db, table: &str, column: &str) -> Result<bool, ApiError> {
@@ -390,18 +515,41 @@ mod ca_tests {
     fn installs_a_pem_ca_and_escaped_newlines() {
         let escaped = self_signed_pem().replace('\n', "\\n");
         let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-        install_database_ca(&mut builder, &escaped).unwrap();
+        assert!(install_database_ca(&mut builder, &escaped).unwrap());
     }
 
     #[test]
     fn ignores_a_blank_ca() {
         let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-        install_database_ca(&mut builder, "   ").unwrap();
+        assert!(!install_database_ca(&mut builder, "   ").unwrap());
+    }
+}
+
+#[cfg(test)]
+mod database_url_tests {
+    use super::database_url;
+
+    #[test]
+    fn prefers_database_url_over_connection_string_aliases() {
+        std::env::set_var("DATABASE_URL", "postgres://from-url/db?sslmode=require");
+        std::env::set_var(
+            "DATABASE_CONNECTION_STRING",
+            "postgres://from-string/db?sslmode=require",
+        );
+        std::env::set_var(
+            "DATABASE_CONNECTION_STRONG",
+            "postgres://from-strong/db?sslmode=require",
+        );
+        assert_eq!(database_url(), "postgres://from-url/db?sslmode=require");
+        std::env::remove_var("DATABASE_URL");
+        std::env::remove_var("DATABASE_CONNECTION_STRING");
+        std::env::remove_var("DATABASE_CONNECTION_STRONG");
     }
 }
 
 #[cfg(test)]
 fn random_schema() -> String {
+    use rand::Rng;
     let mut buffer = [0u8; 8];
     rand::thread_rng().fill(&mut buffer);
     buffer.iter().map(|byte| format!("{byte:02x}")).collect()

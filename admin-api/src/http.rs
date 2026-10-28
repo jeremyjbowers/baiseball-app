@@ -198,6 +198,22 @@ pub async fn create_league(
     json_response(StatusCode::CREATED, json!({ "league": league }))
 }
 
+pub async fn import_roster(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(league_id): Path<String>,
+    request: Request<Body>,
+) -> Result<Response, ApiError> {
+    let body = read_json(request).await?;
+    let token = bearer(&headers)?;
+    let imported = with_db(&state, move |db| {
+        let owner = store::require_owner(db, &token)?;
+        store::import_roster(db, &owner.id, &league_id, &body)
+    })
+    .await?;
+    json_response(StatusCode::CREATED, imported)
+}
+
 pub async fn get_league(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -284,6 +300,80 @@ pub async fn build_schedule(
     })
     .await?;
     json_response(StatusCode::CREATED, schedule)
+}
+
+pub async fn list_subleagues(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(league_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let token = bearer(&headers)?;
+    let subleagues = with_db(&state, move |db| {
+        let owner = store::require_owner(db, &token)?;
+        store::list_subleagues(db, &owner.id, &league_id)
+    })
+    .await?;
+    json_response(StatusCode::OK, json!({ "subleagues": subleagues }))
+}
+
+pub async fn create_subleague(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(league_id): Path<String>,
+    request: Request<Body>,
+) -> Result<Response, ApiError> {
+    let body = read_json(request).await?;
+    let token = bearer(&headers)?;
+    let subleague = with_db(&state, move |db| {
+        let owner = store::require_owner(db, &token)?;
+        store::create_subleague(db, &owner.id, &league_id, &body)
+    })
+    .await?;
+    json_response(StatusCode::CREATED, json!({ "subleague": subleague }))
+}
+
+pub async fn get_subleague(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(subleague_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let token = bearer(&headers)?;
+    let subleague = with_db(&state, move |db| {
+        let owner = store::require_owner(db, &token)?;
+        store::get_subleague(db, &owner.id, &subleague_id)
+    })
+    .await?;
+    json_response(StatusCode::OK, json!({ "subleague": subleague }))
+}
+
+pub async fn update_subleague(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(subleague_id): Path<String>,
+    request: Request<Body>,
+) -> Result<Response, ApiError> {
+    let body = read_json(request).await?;
+    let token = bearer(&headers)?;
+    let subleague = with_db(&state, move |db| {
+        let owner = store::require_owner(db, &token)?;
+        store::update_subleague(db, &owner.id, &subleague_id, &body)
+    })
+    .await?;
+    json_response(StatusCode::OK, json!({ "subleague": subleague }))
+}
+
+pub async fn delete_subleague(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(subleague_id): Path<String>,
+) -> Result<Response, ApiError> {
+    let token = bearer(&headers)?;
+    with_db(&state, move |db| {
+        let owner = store::require_owner(db, &token)?;
+        store::delete_subleague(db, &owner.id, &subleague_id)
+    })
+    .await?;
+    json_response(StatusCode::OK, json!({ "ok": true }))
 }
 
 pub async fn list_divisions(

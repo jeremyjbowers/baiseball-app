@@ -1,0 +1,5 @@
+league,division,team,home_park,managers,rivalries
+National League,West,Harbor Hawks,Camden Yards,ada@league.test;bea@league.test,Wharf Cats:4
+National League,West,Wharf Cats,Fenway Park,cy@league.test,Harbor Hawks:4
+American League,East,Mesa Suns,Dodger Stadium,dee@league.test,
+American League,East,Dune Foxes,Oracle Park,,

@@ -56,12 +56,12 @@ function pairCount(games, left, right, rivalryOnly) {
   }).length;
 }
 
-async function divisionAndTeams(leagueId, groups) {
+async function divisionAndTeams(leagueId, groups, subleagueName = "National League") {
   const ids = {};
   for (const [divisionName, teamNames] of Object.entries(groups)) {
     const division = await send(`/leagues/${leagueId}/divisions`, {
       method: "POST",
-      body: { name: divisionName },
+      body: { name: divisionName, subleagueName },
     });
     assert(division.status === 201, `${divisionName} ${division.status} ${JSON.stringify(division.json)}`);
     ids[divisionName] = [];
@@ -208,7 +208,7 @@ const narrow = await send("/leagues", {
   body: { name: `Narrow ${stamp}`, leagueType: "ulmg", seasonLength: 2, divisionGames: 2, outsideGames: 0 },
 });
 const narrowId = narrow.json.league.id;
-const only = await send(`/leagues/${narrowId}/divisions`, { method: "POST", body: { name: "Only" } });
+const only = await send(`/leagues/${narrowId}/divisions`, { method: "POST", body: { name: "Only", subleagueName: "National League" } });
 for (const name of ["One", "Two", "Three"]) {
   const added = await send(`/leagues/${narrowId}/teams`, {
     method: "POST",
@@ -240,4 +240,39 @@ assert(lineup.status === 201 && lineup.json.lineup.vsLhp.length === 9, `lineup $
 const lineupRead = await send(`/lineups/${lineup.json.lineup.id}`);
 assert(lineupRead.status === 200 && lineupRead.json.canEditLineups === true, "lineup read");
 
-console.log(`proved ULMG ${ulmgId}, NPL ${nplId}, and a rejected rebuild on ${narrowId}`);
+const rosterCsv = [
+  "league,division,team,home_park,managers,rivalries",
+  `National League,West,Harbor Hawks,Camden Yards,ada-${stamp}@league.test;bea-${stamp}@league.test,Wharf Cats:4`,
+  `National League,West,Wharf Cats,Fenway Park,cy-${stamp}@league.test,Harbor Hawks:4`,
+  `American League,East,Mesa Suns,"Oracle Park, San Francisco",dee-${stamp}@league.test,`,
+  "American League,East,Dune Foxes,Oracle Park,,",
+].join("\n");
+const roster = await send("/leagues", {
+  method: "POST",
+  body: {
+    name: `Roster ${stamp}`,
+    leagueType: "ulmg",
+    seasonLength: 6,
+    divisionGames: 4,
+    outsideGames: 2,
+    rosterCsv,
+  },
+});
+assert(roster.status === 201 && roster.json.league.teamCount === 4 && roster.json.league.divisionCount === 2 && roster.json.league.subleagueCount === 2, `roster ${roster.status} ${JSON.stringify(roster.json)}`);
+assert(roster.json.league.rivalries.length === 1 && roster.json.league.rivalries[0].games === 4, "roster rivalry");
+const rosterTeams = await send(`/leagues/${roster.json.league.id}/teams`);
+const harbor = rosterTeams.json.teams.find((team) => team.name === "Harbor Hawks");
+assert(harbor && harbor.managers.length === 2 && harbor.subleagueName === "National League", `harbor managers ${JSON.stringify(harbor)}`);
+const mesa = rosterTeams.json.teams.find((team) => team.name === "Mesa Suns");
+assert(mesa && mesa.homePark === "Oracle Park, San Francisco" && mesa.subleagueName === "American League", "quoted park");
+const patched = await send(`/teams/${harbor.id}`, {
+  method: "PATCH",
+  body: { managerEmails: [`ada-${stamp}@league.test`, `bea-${stamp}@league.test`, `cy-${stamp}@league.test`] },
+});
+assert(patched.status === 200 && patched.json.team.managers.length === 3, `managers ${patched.status} ${JSON.stringify(patched.json)}`);
+const again = await send(`/leagues/${roster.json.league.id}/roster`, { method: "POST", body: { csv: rosterCsv } });
+assert(again.status === 409, `duplicate roster should be 409, got ${again.status} ${JSON.stringify(again.json)}`);
+const still = await send(`/leagues/${roster.json.league.id}`);
+assert(still.json.teams.length === 4, "a rejected roster left the league unchanged");
+
+console.log(`proved ULMG ${ulmgId}, NPL ${nplId}, roster ${roster.json.league.id}, and a rejected rebuild on ${narrowId}`);
