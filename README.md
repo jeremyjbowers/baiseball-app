@@ -56,6 +56,22 @@ cargo run
 
 The API listens on `0.0.0.0:41742`. It reads `DATABASE_URL`. When that is unset, it uses a local Postgres database at `postgres://league:league@127.0.0.1:5432/league_office?sslmode=disable`. `compose.yaml` is the other way to run Postgres, on port 41743. Set `PUBLIC_APP_URL` and `OWNER_BOOTSTRAP_EMAIL` before `cargo run`. See `.do/app.yaml` for the App Platform services.
 
+### DigitalOcean
+
+The App Platform app `league-office` (id `652d5b1a-d4aa-4e0b-b41a-780b0c7fdebd`) tracks `main`. Auto-deploy on merge is handled by `.github/workflows/deploy-digitalocean.yml`.
+
+Add a repository secret named `DIGITALOCEAN_ACCESS_TOKEN` (a DigitalOcean personal access token that can update App Platform apps). After that secret is set, every push to `main` creates a new deployment.
+
+Native App Platform `deploy_on_push` needs the DigitalOcean GitHub integration to have access to `jeremyjbowers/baiseball-app`. Until that is connected in the DigitalOcean control panel, keep the git clone source in `.do/app.yaml` and rely on the workflow.
+
+Manual deploy:
+
+```bash
+doctl apps create-deployment 652d5b1a-d4aa-4e0b-b41a-780b0c7fdebd --force-rebuild
+```
+
+The API loads `DATABASE_CA_CERT` (from `${db.CA_CERT}` on App Platform) when connecting with `sslmode=require`.
+
 ```bash
 cd web
 npm install

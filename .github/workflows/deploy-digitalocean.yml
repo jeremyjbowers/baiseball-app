@@ -1,0 +1,34 @@
+name: Deploy DigitalOcean
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: digitalocean-league-office
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require DigitalOcean token
+        env:
+          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$DIGITALOCEAN_ACCESS_TOKEN" ]; then
+            echo "Add repository secret DIGITALOCEAN_ACCESS_TOKEN (a DigitalOcean personal access token that can update App Platform apps)."
+            exit 1
+          fi
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Create App Platform deployment
+        env:
+          DIGITALOCEAN_APP_ID: 652d5b1a-d4aa-4e0b-b41a-780b0c7fdebd
+        run: doctl apps create-deployment "$DIGITALOCEAN_APP_ID" --force-rebuild --wait
