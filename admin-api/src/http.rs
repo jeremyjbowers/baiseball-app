@@ -196,6 +196,22 @@ pub async fn create_league(
     json_response(StatusCode::CREATED, json!({ "league": league }))
 }
 
+pub async fn import_roster(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(league_id): Path<String>,
+    request: Request<Body>,
+) -> Result<Response, ApiError> {
+    let body = read_json(request).await?;
+    let token = bearer(&headers)?;
+    let imported = with_db(&state, move |db| {
+        let owner = store::require_owner(db, &token)?;
+        store::import_roster(db, &owner.id, &league_id, &body)
+    })
+    .await?;
+    json_response(StatusCode::CREATED, imported)
+}
+
 pub async fn get_league(
     State(state): State<AppState>,
     headers: HeaderMap,

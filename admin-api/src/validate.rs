@@ -59,15 +59,42 @@ pub fn parse_email(value: Option<&Value>) -> Result<String, ApiError> {
     Ok(email)
 }
 
+pub fn parse_manager_emails(value: Option<&Value>) -> Result<Vec<String>, ApiError> {
+    let Some(items) = value.and_then(Value::as_array) else {
+        return Err(ApiError::bad("Managers must be a list of email addresses."));
+    };
+    let mut emails = Vec::new();
+    for item in items {
+        let Some(text) = item.as_str() else {
+            return Err(ApiError::bad("Enter an email address."));
+        };
+        if text.trim().is_empty() {
+            continue;
+        }
+        let email = parse_email(Some(item))?;
+        if !emails.contains(&email) {
+            emails.push(email);
+        }
+    }
+    if emails.len() > 8 {
+        return Err(ApiError::bad("A team can have at most 8 managers."));
+    }
+    Ok(emails)
+}
+
 pub const MAX_SEASON_GAMES: u32 = 366;
 
 pub fn parse_league_type(value: Option<&Value>) -> Result<String, ApiError> {
     match value.and_then(Value::as_str) {
         Some("ulmg") => Ok("ulmg".to_string()),
         Some("npl") => Ok("npl".to_string()),
-        _ => Err(ApiError::bad("Choose a league type: ULMG or NPL.")),
+        _ => Err(ApiError::bad(
+            "Choose a league type: like strat-o-matic or like scoresheet.",
+        )),
     }
 }
+
+pub const LOCK_FOLLOWS_TYPE: &str = "Lineup lock follows the league type. like strat-o-matic locks by game. like scoresheet locks by week.";
 
 pub fn lock_for_type(league_type: &str) -> &'static str {
     match league_type {

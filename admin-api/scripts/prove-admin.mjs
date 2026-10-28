@@ -240,4 +240,39 @@ assert(lineup.status === 201 && lineup.json.lineup.vsLhp.length === 9, `lineup $
 const lineupRead = await send(`/lineups/${lineup.json.lineup.id}`);
 assert(lineupRead.status === 200 && lineupRead.json.canEditLineups === true, "lineup read");
 
-console.log(`proved ULMG ${ulmgId}, NPL ${nplId}, and a rejected rebuild on ${narrowId}`);
+const rosterCsv = [
+  "division,team,home_park,managers,rivalries",
+  `East,Harbor,Camden Yards,ada-${stamp}@league.test;bea-${stamp}@league.test,Wharf:4`,
+  `East,Wharf,Fenway Park,cy-${stamp}@league.test,Harbor:4`,
+  `West,Mesa,"Oracle Park, San Francisco",dee-${stamp}@league.test,`,
+  "West,Dunes,Oracle Park,,",
+].join("\n");
+const roster = await send("/leagues", {
+  method: "POST",
+  body: {
+    name: `Roster ${stamp}`,
+    leagueType: "ulmg",
+    seasonLength: 6,
+    divisionGames: 4,
+    outsideGames: 2,
+    rosterCsv,
+  },
+});
+assert(roster.status === 201 && roster.json.league.teamCount === 4 && roster.json.league.divisionCount === 2, `roster ${roster.status} ${JSON.stringify(roster.json)}`);
+assert(roster.json.league.rivalries.length === 1 && roster.json.league.rivalries[0].games === 4, "roster rivalry");
+const rosterTeams = await send(`/leagues/${roster.json.league.id}/teams`);
+const harbor = rosterTeams.json.teams.find((team) => team.name === "Harbor");
+assert(harbor && harbor.managers.length === 2, `harbor managers ${JSON.stringify(harbor)}`);
+const mesa = rosterTeams.json.teams.find((team) => team.name === "Mesa");
+assert(mesa && mesa.homePark === "Oracle Park, San Francisco", "quoted park");
+const patched = await send(`/teams/${harbor.id}`, {
+  method: "PATCH",
+  body: { managerEmails: [`ada-${stamp}@league.test`, `bea-${stamp}@league.test`, `cy-${stamp}@league.test`] },
+});
+assert(patched.status === 200 && patched.json.team.managers.length === 3, `managers ${patched.status} ${JSON.stringify(patched.json)}`);
+const again = await send(`/leagues/${roster.json.league.id}/roster`, { method: "POST", body: { csv: rosterCsv } });
+assert(again.status === 409, `duplicate roster should be 409, got ${again.status} ${JSON.stringify(again.json)}`);
+const still = await send(`/leagues/${roster.json.league.id}`);
+assert(still.json.teams.length === 4, "a rejected roster left the league unchanged");
+
+console.log(`proved ULMG ${ulmgId}, NPL ${nplId}, roster ${roster.json.league.id}, and a rejected rebuild on ${narrowId}`);

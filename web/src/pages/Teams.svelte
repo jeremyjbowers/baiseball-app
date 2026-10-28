@@ -1,9 +1,10 @@
 <script>
   import { onMount } from "svelte";
   import { api } from "../lib/api.js";
-  import { lockDetail } from "../lib/copy.js";
+  import { lockDetail, managerLine } from "../lib/copy.js";
   import { navigate } from "../lib/nav.js";
   import Field from "../lib/Field.svelte";
+  import ManagersField from "../lib/ManagersField.svelte";
 
   let teams = $state([]);
   let leagues = $state([]);
@@ -14,7 +15,7 @@
   let chosenDivision = $state("");
   let name = $state("");
   let homePark = $state("");
-  let ownerEmail = $state("");
+  let managerEmails = $state([""]);
   let pending = $state(false);
   let league = $derived(leagues.find((item) => item.id === leagueId));
   let divisionId = $derived(league?.divisions.some((division) => division.id === chosenDivision) ? chosenDivision : (league?.divisions[0]?.id ?? ""));
@@ -39,8 +40,9 @@
     pending = true;
     formError = "";
     try {
+      const managers = managerEmails.map((email) => email.trim()).filter(Boolean);
       const body = { name, divisionId, homePark };
-      if (ownerEmail.trim()) body.ownerEmail = ownerEmail.trim();
+      if (managers.length) body.managerEmails = managers;
       const payload = await api(`/leagues/${leagueId}/teams`, {
         method: "POST",
         body: JSON.stringify(body),
@@ -58,7 +60,7 @@
 <div class="stack">
   <div>
     <h1>Teams</h1>
-    <p class="muted">Lineups are the MLB card only, one versus left-handed pitching and one versus right-handed pitching. You see the teams you control. An administrator sees every team.</p>
+    <p class="muted">Lineups are the MLB card only, one versus left-handed pitching and one versus right-handed pitching. You see the teams you manage. An administrator sees every team.</p>
   </div>
   {#if loading}<div class="status" role="status">Loading teams…</div>{/if}
   {#if error}
@@ -76,6 +78,7 @@
         <h2><a class="link" href="/teams/{team.id}">{team.name}</a></h2>
         <p>{team.leagueName} · {team.divisionName}</p>
         <p>Home park: {team.homePark}</p>
+        <p>Managers: {managerLine(team)}</p>
         <p class="muted">{lockDetail(team.lineupLock)}</p>
         <p class="muted">{team.lineupCount} {team.lineupCount === 1 ? "lineup" : "lineups"}</p>
         <a class="button secondary" href="/teams/{team.id}">Open team</a>
@@ -103,9 +106,11 @@
       {/if}
       <Field id="create-team-name" label="Team name"><input id="create-team-name" bind:value={name} /></Field>
       <Field id="create-home-park" label="Home park" hint="The park this team plays in at home."><input id="create-home-park" bind:value={homePark} /></Field>
-      <Field id="create-owner-email" label="Owner email" hint="Optional. Stored for later, when sign-in is on.">
-        <input id="create-owner-email" type="email" bind:value={ownerEmail} />
-      </Field>
+      <ManagersField
+        idPrefix="create-manager"
+        bind:emails={managerEmails}
+        hint="Optional. Add every manager. Leave this blank and the office holds the team."
+      />
       <button type="submit" disabled={pending || !league || league.divisions.length === 0 || league.teamCount >= 30}>
         {pending ? "Creating the team…" : "Create team"}
       </button>

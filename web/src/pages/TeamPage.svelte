@@ -5,6 +5,7 @@
   import { navigate } from "../lib/nav.js";
   import Confirm from "../lib/Confirm.svelte";
   import Field from "../lib/Field.svelte";
+  import ManagersField from "../lib/ManagersField.svelte";
 
   let { teamId } = $props();
   let data = $state(null);
@@ -14,7 +15,7 @@
   let name = $state("");
   let divisionId = $state("");
   let homePark = $state("");
-  let ownerEmail = $state("");
+  let managerEmails = $state([""]);
   let pending = $state(false);
 
   async function load() {
@@ -26,7 +27,8 @@
       name = payload.team.name;
       divisionId = payload.team.divisionId;
       homePark = payload.team.homePark;
-      ownerEmail = payload.team.ownerEmail;
+      managerEmails = (payload.team.managers ?? []).map((manager) => manager.email);
+      if (managerEmails.length === 0 && payload.team.ownerEmail) managerEmails = [payload.team.ownerEmail];
     } catch (caught) {
       error = caught instanceof Error ? caught.message : "The team could not be loaded.";
     } finally {
@@ -39,20 +41,27 @@
     pending = true;
     formError = "";
     try {
+      const managers = managerEmails.map((email) => email.trim()).filter(Boolean);
+      if (data.viewerIsAdmin && managers.length === 0) {
+        formError = "Name at least one manager.";
+        pending = false;
+        return;
+      }
       const payload = await api(`/teams/${data.team.id}`, {
         method: "PATCH",
         body: JSON.stringify({
           name,
           divisionId,
           homePark,
-          ...(data.viewerIsAdmin ? { ownerEmail } : {}),
+          ...(data.viewerIsAdmin ? { managerEmails: managers } : {}),
         }),
       });
       data = { ...data, team: { ...data.team, ...payload.team } };
       name = payload.team.name;
       divisionId = payload.team.divisionId;
       homePark = payload.team.homePark;
-      ownerEmail = payload.team.ownerEmail;
+      managerEmails = (payload.team.managers ?? []).map((manager) => manager.email);
+      if (managerEmails.length === 0 && payload.team.ownerEmail) managerEmails = [payload.team.ownerEmail];
     } catch (caught) {
       formError = caught instanceof Error ? caught.message : "The team could not be saved.";
     } finally {
@@ -87,9 +96,14 @@
         </select>
       </Field>
       <Field id="edit-home-park" label="Home park" hint="The park this team plays in at home."><input id="edit-home-park" bind:value={homePark} /></Field>
-      <Field id="edit-owner-email" label="Owner email" hint="Stored for later, when sign-in is on. This office can still edit the lineup.">
-        <input id="edit-owner-email" type="email" bind:value={ownerEmail} disabled={!data.viewerIsAdmin} />
-      </Field>
+      <ManagersField
+        idPrefix="edit-manager"
+        bind:emails={managerEmails}
+        disabled={!data.viewerIsAdmin}
+        hint={data.viewerIsAdmin
+          ? "Add every manager. Each one can sign in and write the lineup."
+          : "A manager can sign in and write the lineup. The league administrator changes this list."}
+      />
       <button type="submit" disabled={pending}>{pending ? "Saving the team…" : "Save team"}</button>
     </form>
 
@@ -97,7 +111,7 @@
       <div class="spread">
         <div>
           <h2>Lineups</h2>
-          <p class="muted">Each lineup is the MLB card only. Store one card versus left-handed pitching and one card versus right-handed pitching. The controlling owner writes the cards. An administrator can write them too.</p>
+          <p class="muted">Each lineup is the MLB card only. Store one card versus left-handed pitching and one card versus right-handed pitching. A manager writes the cards. An administrator can write them too.</p>
         </div>
         {#if data.canEditLineups}<a class="button" href="/teams/{data.team.id}/lineups/new">Add a lineup</a>
         {/if}

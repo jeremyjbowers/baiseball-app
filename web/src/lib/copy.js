@@ -13,20 +13,20 @@ export const POSITIONS = [
 export const TYPES = [
   {
     value: "ulmg",
-    label: "ULMG",
+    label: "like strat-o-matic",
     lock: "game",
     detail: "One game at a time. A season behind. Lineups lock by game.",
   },
   {
     value: "npl",
-    label: "NPL",
+    label: "like scoresheet",
     lock: "week",
     detail: "Simulate a week. Mix current and past stats. Lineups lock by week.",
   },
 ];
 
 export function typeDetail(value) {
-  return TYPES.find((type) => type.value === value)?.detail ?? "Choose ULMG or NPL.";
+  return TYPES.find((type) => type.value === value)?.detail ?? "Choose a league type.";
 }
 
 export function typeLabel(value) {
@@ -72,12 +72,12 @@ export const LOCKS = [
   {
     value: "game",
     label: "Game",
-    detail: "ULMG locks lineups by game. One game at a time, a season behind.",
+    detail: "like strat-o-matic locks lineups by game. One game at a time, a season behind.",
   },
   {
     value: "week",
     label: "Week",
-    detail: "NPL locks lineups by week. The league simulates a week and mixes current and past stats.",
+    detail: "like scoresheet locks lineups by week. The league simulates a week and mixes current and past stats.",
   },
   {
     value: "half",
@@ -93,6 +93,12 @@ export const LOCKS = [
 
 export function lockDetail(value) {
   return LOCKS.find((lock) => lock.value === value)?.detail ?? value;
+}
+
+export function managerLine(team) {
+  const listed = (team?.managers ?? []).map((manager) => manager.email).filter(Boolean);
+  if (listed.length > 0) return listed.join(", ");
+  return team?.ownerEmail || "";
 }
 
 export function positionLabel(value) {

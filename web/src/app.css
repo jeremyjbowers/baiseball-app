@@ -177,7 +177,7 @@ legend {
 
 .choice span { display: grid; gap: 0.15rem; }
 
-.counts, .rivalry-form { display: grid; gap: 0.75rem; }
+.counts, .rivalry-form, .manager-row { display: grid; gap: 0.75rem; }
 
 .schedule-head, .schedule-row {
   display: grid;
@@ -212,5 +212,7 @@ dialog::backdrop { background: rgb(44 36 28 / 35%); }
   .form-inline .field { flex: 1; }
   .counts { grid-template-columns: repeat(3, 1fr); }
   .rivalry-form { grid-template-columns: 1fr 1fr 6.5rem auto; align-items: end; }
+  .manager-row { grid-template-columns: 1fr auto; align-items: end; }
+  .manager-row.single { grid-template-columns: 1fr; }
   .schedule-head, .schedule-row { grid-template-columns: 1fr 1fr 14rem; align-items: center; }
 }

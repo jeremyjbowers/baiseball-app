@@ -1,11 +1,13 @@
 <script>
   import { onMount } from "svelte";
   import { api } from "../lib/api.js";
-  import { countNote, typeDetail } from "../lib/copy.js";
+  import { countNote, managerLine, typeDetail } from "../lib/copy.js";
   import { navigate } from "../lib/nav.js";
   import Confirm from "../lib/Confirm.svelte";
   import Field from "../lib/Field.svelte";
   import LeagueFields from "../lib/LeagueFields.svelte";
+  import ManagersField from "../lib/ManagersField.svelte";
+  import RosterFile from "../lib/RosterFile.svelte";
 
   let { leagueId } = $props();
   let league = $state(null);
@@ -27,7 +29,10 @@
   let teamName = $state("");
   let divisionId = $state("");
   let homePark = $state("");
-  let ownerEmail = $state("");
+  let managerEmails = $state([""]);
+  let rosterCsv = $state("");
+  let rosterName = $state("");
+  let notice = $state("");
   let pending = $state("");
   let note = $derived(countNote(seasonLength, divisionGames, outsideGames));
 
@@ -76,6 +81,7 @@
   async function run(key, action) {
     pending = key;
     formError = "";
+    notice = "";
     try {
       await action();
     } catch (caught) {
@@ -156,8 +162,9 @@
     </div>
     <p class:danger={!league.inBounds}>{league.boundLabel}</p>
     <p class="muted">{typeDetail(league.leagueType)}</p>
-    <p class="muted">Division size is not fixed. ULMG is often 16 teams in four divisions. NPL is often 24 teams in six divisions. Those counts are examples. 26 and 28 team counts are closed.</p>
+    <p class="muted">Division size is not fixed. like strat-o-matic is often 16 teams in four divisions. like scoresheet is often 24 teams in six divisions. Those counts are examples. 26 and 28 team counts are closed.</p>
     {#if formError}<div class="alert error" role="alert"><strong>Could not save</strong><p>{formError}</p></div>{/if}
+    {#if notice}<div class="alert" role="status"><p>{notice}</p></div>{/if}
 
     <form class="card stack" onsubmit={(event) => { event.preventDefault(); run("league", async () => {
       const payload = await api(`/leagues/${league.id}`, { method: "PATCH", body: JSON.stringify(settingsBody()) });
@@ -250,30 +257,56 @@
     <section class="stack">
       <h2>Teams</h2>
       {#if teams.length === 0}
-        <div class="empty"><h3>No teams yet</h3><p class="muted">A team has a name, a division, and a home park. The owner email is stored for later. Sign-in is not on, so this office can edit the lineup.</p></div>
+        <div class="empty"><h3>No teams yet</h3><p class="muted">A team has a name, a division, a home park, and one or more managers. Leave managers blank and the office holds the team. Sign-in is not on, so this office can edit the lineup.</p></div>
       {/if}
       {#each teams as team (team.id)}
         <article class="card stack">
           <h3><a class="link" href="/teams/{team.id}">{team.name}</a></h3>
           <p>{team.divisionName}</p>
           <p>Home park: {team.homePark}</p>
-          <p>Owner email: {team.ownerEmail}</p>
+          <p>Managers: {managerLine(team)}</p>
           <p class="muted">{team.lineupCount} {team.lineupCount === 1 ? "lineup" : "lineups"}</p>
           <a class="button secondary" href="/teams/{team.id}">Open team</a>
         </article>
       {/each}
+      <form class="panel stack" onsubmit={(event) => { event.preventDefault(); run("roster", async () => {
+        if (!rosterCsv.trim()) {
+          formError = "Choose a roster CSV.";
+          return;
+        }
+        const payload = await api(`/leagues/${league.id}/roster`, { method: "POST", body: JSON.stringify({ csv: rosterCsv }) });
+        apply(payload, true);
+        rivalries = (payload.league.rivalries ?? []).map((rivalry) => ({
+          teamId: rivalry.teamId,
+          opponentTeamId: rivalry.opponentTeamId,
+          games: rivalry.games,
+          teamName: rivalry.teamName,
+          opponentTeamName: rivalry.opponentTeamName,
+        }));
+        const divisions = Number(payload.addedDivisions ?? 0);
+        const added = Number(payload.addedTeams ?? 0);
+        const divisionText = divisions === 1 ? "1 division" : `${divisions} divisions`;
+        const teamText = added === 1 ? "1 team" : `${added} teams`;
+        notice = divisions > 0 ? `Added ${divisionText} and ${teamText}.` : `Added ${teamText}.`;
+        rosterCsv = "";
+        rosterName = "";
+      }); }}>
+        <RosterFile bind:csv={rosterCsv} bind:fileName={rosterName} idPrefix="league-roster" />
+        <button type="submit" disabled={pending === "roster" || !rosterCsv.trim()}>{pending === "roster" ? "Adding teams…" : "Add teams from file"}</button>
+      </form>
       {#if league.teamCount >= 30}
         <p class="danger">This league already has 30 teams.</p>
       {:else if league.divisions.length === 0}
         <p class="muted">Add a division before adding a team.</p>
       {:else}
         <form class="panel stack" onsubmit={(event) => { event.preventDefault(); run("new-team", async () => {
+          const managers = managerEmails.map((email) => email.trim()).filter(Boolean);
           const body = { name: teamName, divisionId, homePark };
-          if (ownerEmail.trim()) body.ownerEmail = ownerEmail.trim();
+          if (managers.length) body.managerEmails = managers;
           await api(`/leagues/${league.id}/teams`, { method: "POST", body: JSON.stringify(body) });
           teamName = "";
           homePark = "";
-          ownerEmail = "";
+          managerEmails = [""];
           await load(true);
         }); }}>
           <h3>Add a team</h3>
@@ -284,9 +317,11 @@
             </select>
           </Field>
           <Field id="home-park" label="Home park" hint="The park this team plays in at home."><input id="home-park" bind:value={homePark} /></Field>
-          <Field id="owner-email" label="Owner email" hint="Optional. Stored for later, when sign-in is on. Blank leaves the team with the office.">
-            <input id="owner-email" type="email" bind:value={ownerEmail} />
-          </Field>
+          <ManagersField
+            idPrefix="league-manager"
+            bind:emails={managerEmails}
+            hint="Optional. Add every manager. Leave this blank and the office holds the team."
+          />
           <button type="submit" disabled={pending === "new-team"}>{pending === "new-team" ? "Adding the team…" : "Add team"}</button>
         </form>
       {/if}
