@@ -165,27 +165,18 @@ pub fn connect(url: &str) -> Result<Db, ApiError> {
     let verify_ca = url.contains("sslmode=verify-ca") || url.contains("sslmode=verify-full");
     let wants_tls = verify_ca || url.contains("sslmode=require");
     let client = if wants_tls {
-        let mut builder = SslConnector::builder(SslMethod::tls()).map_err(|err| {
-            eprintln!("tls: {err}");
-            ApiError::internal()
-        })?;
         let ca_pem = std::env::var("DATABASE_CA_CERT").unwrap_or_default();
-        let installed_ca = install_database_ca(&mut builder, &ca_pem).map_err(|err| {
-            eprintln!("database ca: {err}");
-            ApiError::internal()
-        })?;
-        // libpq: sslmode=require encrypts but does not verify the server cert.
-        // DigitalOcean's managed Postgres CA is sometimes empty via ${db.CA_CERT},
-        // so require must not depend on a CA being present.
-        if verify_ca {
-            if !installed_ca {
-                eprintln!("database ca: sslmode requests verification but DATABASE_CA_CERT is empty");
-                return Err(ApiError::internal());
-            }
-        } else {
-            builder.set_verify(SslVerifyMode::NONE);
+        let connector = database_tls_connector(verify_ca, &ca_pem)?;
+        let mut tls = MakeTlsConnector::new(connector);
+        if !verify_ca {
+            // postgres-openssl enables hostname checks after the context is built.
+            // libpq sslmode=require does not check the name or the chain.
+            tls.set_callback(|config, _domain| {
+                config.set_verify(SslVerifyMode::NONE);
+                config.set_verify_hostname(false);
+                Ok(())
+            });
         }
-        let tls = MakeTlsConnector::new(builder.build());
         Client::connect(url, tls).map_err(db_err)?
     } else {
         Client::connect(url, NoTls).map_err(db_err)?
@@ -194,6 +185,32 @@ pub fn connect(url: &str) -> Result<Db, ApiError> {
         client,
         test_schema: None,
     })
+}
+
+fn database_tls_connector(
+    verify_ca: bool,
+    ca_pem: &str,
+) -> Result<openssl::ssl::SslConnector, ApiError> {
+    let mut builder = SslConnector::builder(SslMethod::tls()).map_err(|err| {
+        eprintln!("tls: {err}");
+        ApiError::internal()
+    })?;
+    let installed_ca = install_database_ca(&mut builder, ca_pem).map_err(|err| {
+        eprintln!("database ca: {err}");
+        ApiError::internal()
+    })?;
+    // libpq: sslmode=require encrypts but does not verify the server cert.
+    // DigitalOcean's managed Postgres CA is empty via the databases CA API, so
+    // require must not depend on a CA being present. The chain is self-signed.
+    if verify_ca {
+        if !installed_ca {
+            eprintln!("database ca: sslmode requests verification but DATABASE_CA_CERT is empty");
+            return Err(ApiError::internal());
+        }
+    } else {
+        builder.set_verify(SslVerifyMode::NONE);
+    }
+    Ok(builder.build())
 }
 
 fn install_database_ca(
@@ -479,7 +496,7 @@ mod ca_tests {
     use openssl::nid::Nid;
     use openssl::pkey::PKey;
     use openssl::rsa::Rsa;
-    use openssl::ssl::{SslConnector, SslMethod};
+    use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
     use openssl::x509::{X509NameBuilder, X509};
 
     use super::install_database_ca;
@@ -519,6 +536,141 @@ mod ca_tests {
         let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
         assert!(!install_database_ca(&mut builder, "   ").unwrap());
     }
+
+    #[test]
+    fn require_accepts_a_self_signed_chain_without_hostname_match() {
+        let (ca, leaf_key, leaf) = ca_signed_leaf();
+        let handshake = handshake_with(ca, leaf_key, leaf, false);
+        assert!(
+            handshake.is_ok(),
+            "sslmode=require must encrypt without verifying, got {handshake:?}"
+        );
+    }
+
+    #[test]
+    fn default_verify_rejects_a_self_signed_chain() {
+        let (ca, leaf_key, leaf) = ca_signed_leaf();
+        let err = handshake_with(ca, leaf_key, leaf, true).unwrap_err();
+        let text = err.to_string();
+        assert!(
+            text.contains("certificate verify failed") || text.contains("self-signed"),
+            "{text}"
+        );
+    }
+
+    fn ca_signed_leaf() -> (X509, PKey<openssl::pkey::Private>, X509) {
+        let ca_key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        let mut ca_name = X509NameBuilder::new().unwrap();
+        ca_name
+            .append_entry_by_nid(Nid::COMMONNAME, "baiseball-test-ca")
+            .unwrap();
+        let ca_name = ca_name.build();
+        let mut ca_builder = X509::builder().unwrap();
+        ca_builder.set_version(2).unwrap();
+        let serial = Asn1Integer::from_bn(&BigNum::from_u32(1).unwrap()).unwrap();
+        ca_builder.set_serial_number(&serial).unwrap();
+        ca_builder.set_subject_name(&ca_name).unwrap();
+        ca_builder.set_issuer_name(&ca_name).unwrap();
+        ca_builder.set_pubkey(&ca_key).unwrap();
+        ca_builder
+            .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        ca_builder
+            .set_not_after(&Asn1Time::days_from_now(7).unwrap())
+            .unwrap();
+        ca_builder
+            .append_extension(
+                openssl::x509::extension::BasicConstraints::new()
+                    .critical()
+                    .ca()
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap();
+        ca_builder.sign(&ca_key, MessageDigest::sha256()).unwrap();
+        let ca = ca_builder.build();
+
+        let leaf_key = PKey::from_rsa(Rsa::generate(2048).unwrap()).unwrap();
+        let mut leaf_name = X509NameBuilder::new().unwrap();
+        leaf_name
+            .append_entry_by_nid(Nid::COMMONNAME, "db.example")
+            .unwrap();
+        let leaf_name = leaf_name.build();
+        let mut leaf_builder = X509::builder().unwrap();
+        leaf_builder.set_version(2).unwrap();
+        let serial = Asn1Integer::from_bn(&BigNum::from_u32(2).unwrap()).unwrap();
+        leaf_builder.set_serial_number(&serial).unwrap();
+        leaf_builder.set_subject_name(&leaf_name).unwrap();
+        leaf_builder.set_issuer_name(ca.subject_name()).unwrap();
+        leaf_builder.set_pubkey(&leaf_key).unwrap();
+        leaf_builder
+            .set_not_before(&Asn1Time::days_from_now(0).unwrap())
+            .unwrap();
+        leaf_builder
+            .set_not_after(&Asn1Time::days_from_now(7).unwrap())
+            .unwrap();
+        leaf_builder.sign(&ca_key, MessageDigest::sha256()).unwrap();
+        (ca, leaf_key, leaf_builder.build())
+    }
+
+    fn handshake_with(
+        ca: X509,
+        leaf_key: PKey<openssl::pkey::Private>,
+        leaf: X509,
+        verify_peer: bool,
+    ) -> Result<(), String> {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+        use std::time::Duration;
+
+        let mut acceptor = openssl::ssl::SslAcceptor::mozilla_intermediate(SslMethod::tls())
+            .map_err(|err| err.to_string())?;
+        acceptor
+            .set_private_key(&leaf_key)
+            .map_err(|err| err.to_string())?;
+        acceptor
+            .set_certificate(&leaf)
+            .map_err(|err| err.to_string())?;
+        acceptor
+            .add_extra_chain_cert(ca)
+            .map_err(|err| err.to_string())?;
+        acceptor
+            .check_private_key()
+            .map_err(|err| err.to_string())?;
+        let acceptor = acceptor.build();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            if let Ok(mut tls) = acceptor.accept(stream) {
+                let _ = tls.write_all(b"ok");
+            }
+        });
+
+        let stream = std::net::TcpStream::connect(addr).map_err(|err| err.to_string())?;
+        stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        let connector = if verify_peer {
+            SslConnector::builder(SslMethod::tls())
+                .map_err(|err| err.to_string())?
+                .build()
+        } else {
+            super::database_tls_connector(false, "").map_err(|err| err.message)?
+        };
+        // postgres-openssl calls configure(), which turns hostname checks on.
+        let mut config = connector.configure().map_err(|err| err.to_string())?;
+        if !verify_peer {
+            config.set_verify(SslVerifyMode::NONE);
+            config.set_verify_hostname(false);
+        }
+        let mut tls = config
+            .connect("not-the-cert-name.example", stream)
+            .map_err(|err| err.to_string())?;
+        let mut buf = [0u8; 2];
+        tls.read(&mut buf).map_err(|err| err.to_string())?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -536,10 +688,7 @@ mod database_url_tests {
             "DATABASE_CONNECTION_STRONG",
             "postgres://from-strong/db?sslmode=require",
         );
-        assert_eq!(
-            database_url(),
-            "postgres://from-url/db?sslmode=require"
-        );
+        assert_eq!(database_url(), "postgres://from-url/db?sslmode=require");
         std::env::remove_var("DATABASE_URL");
         std::env::remove_var("DATABASE_CONNECTION_STRING");
         std::env::remove_var("DATABASE_CONNECTION_STRONG");
