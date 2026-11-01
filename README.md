@@ -78,7 +78,7 @@ npm install
 npm run dev
 ```
 
-The app listens on `0.0.0.0:41741`. Open `http://127.0.0.1:41741` and sign in. Email uses Mailgun when configured. A text uses Twilio when the owner has saved a phone number. Without those providers, the sign-in link is shown on the next screen.
+The app listens on `0.0.0.0:41741`. Open `http://127.0.0.1:41741` and sign in with email. Mailgun sends the link when configured; otherwise the sign-in link is shown on the next screen. Text-message sign-in is turned off for now.
 
 With the API running:
 

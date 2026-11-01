@@ -20,12 +20,20 @@ pub struct AppState {
 
 async fn with_db<T: Send + 'static>(
     state: &AppState,
-    work: impl FnOnce(&mut Db) -> Result<T, ApiError> + Send + 'static,
+    mut work: impl FnMut(&mut Db) -> Result<T, ApiError> + Send + 'static,
 ) -> Result<T, ApiError> {
     let db = Arc::clone(&state.db);
     match tokio::task::spawn_blocking(move || {
         let mut guard = db.lock().map_err(|_| ApiError::internal())?;
-        work(&mut guard)
+        crate::db::ensure_alive(&mut guard)?;
+        match work(&mut guard) {
+            Ok(value) => Ok(value),
+            Err(_err) if guard.client.is_closed() => {
+                crate::db::replace_connection(&mut guard)?;
+                work(&mut guard)
+            }
+            Err(err) => Err(err),
+        }
     })
     .await
     {
@@ -68,16 +76,11 @@ pub async fn magic_link(
     let issued = with_db(&state, move |db| store::issue_magic_link(db, &body)).await?;
     let origin = state.web_origin.trim_end_matches('/');
     let magic_link = format!("{origin}/auth/verify?token={}", issued.token);
-    let dev_only = if issued.channel == "sms" {
-        crate::notify::send_sms(&issued.destination, &magic_link)?
-    } else {
-        crate::notify::send_email(&issued.destination, &magic_link)?
-    };
+    let dev_only = crate::notify::send_email(&issued.destination, &magic_link)?;
     let mut payload = json!({
         "channel": issued.channel,
         "destination": issued.destination,
-        "email": if issued.channel == "email" { Value::String(issued.destination.clone()) } else { Value::Null },
-        "phone": if issued.channel == "sms" { Value::String(issued.destination) } else { Value::Null },
+        "email": issued.destination,
         "expiresAt": issued.expires_at,
         "devOnly": dev_only,
     });

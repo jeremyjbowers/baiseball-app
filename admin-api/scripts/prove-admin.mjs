@@ -95,11 +95,8 @@ assert(admin.owner.isAdmin === true, "bootstrap owner is an admin");
 const signed = await signIn({ email });
 sessionToken = signed.token;
 const bearer = sessionToken;
-const phone = "+15555550100";
-const savedPhone = await send("/owners/me", { method: "PATCH", token: bearer, body: { phone } });
-assert(savedPhone.status === 200 && savedPhone.json.owner.phone === phone, `phone ${savedPhone.status} ${JSON.stringify(savedPhone.json)}`);
-const texted = await send("/auth/magic-links", { method: "POST", body: { phone } });
-assert(texted.status === 200 && texted.json.channel === "sms" && texted.json.devOnly === true, `sms ${texted.status} ${JSON.stringify(texted.json)}`);
+const texted = await send("/auth/magic-links", { method: "POST", body: { phone: "+15555550100" } });
+assert(texted.status === 400, `sms should be off, got ${texted.status} ${JSON.stringify(texted.json)}`);
 
 const open = await send("/leagues", { token: bearer });
 assert(open.status === 200 && Array.isArray(open.json.leagues), `leagues ${open.status}`);

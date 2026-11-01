@@ -246,6 +246,33 @@ pub fn open() -> Result<Db, ApiError> {
     Ok(db)
 }
 
+pub fn ensure_alive(db: &mut Db) -> Result<(), ApiError> {
+    if !db.client.is_closed() {
+        match db.client.execute("SELECT 1", &[]) {
+            Ok(_) => return Ok(()),
+            Err(err) => eprintln!("postgres: reconnecting after {err}"),
+        }
+    } else {
+        eprintln!("postgres: reconnecting after closed connection");
+    }
+    replace_connection(db)
+}
+
+pub fn replace_connection(db: &mut Db) -> Result<(), ApiError> {
+    // Clear test_schema first so Drop does not tear down a shared test schema.
+    let schema = db.test_schema.take();
+    let mut next = connect(&database_url())?;
+    if let Some(schema) = schema {
+        next.batch(&format!("SET search_path TO {schema}"))
+            .map_err(db_err)?;
+        next.test_schema = Some(schema);
+    } else {
+        migrate(&mut next)?;
+    }
+    *db = next;
+    Ok(())
+}
+
 #[cfg(test)]
 pub fn open_test() -> Result<Db, ApiError> {
     let mut admin = connect(&database_url())?;
