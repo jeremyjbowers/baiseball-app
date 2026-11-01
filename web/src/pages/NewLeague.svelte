@@ -44,7 +44,7 @@
   }
 </script>
 
-<form class="stack narrow" style="margin-top:0" onsubmit={submit}>
+<form class="stack narrow" onsubmit={submit}>
   <div>
     <h1>Create a league</h1>
     <p class="muted">like strat-o-matic plays one game at a time, a season behind, and locks lineups by game. like scoresheet simulates a week, mixes current and past stats, and locks lineups by week. Teams sit in a league and a division, for example National League, West, Harbor Hawks. Name those yourself, or upload a roster file. Team count stays between 10 and 30. 26 and 28 are closed.</p>
