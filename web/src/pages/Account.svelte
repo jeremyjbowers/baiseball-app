@@ -27,7 +27,7 @@
 {#if loading}
   <div class="status" role="status">Loading your account…</div>
 {:else}
-  <div class="stack narrow" style="margin-top:0">
+  <div class="stack narrow">
     <div>
       <h1>Your account</h1>
       <p class="muted">{email}{isAdmin ? " · administrator" : ""}</p>

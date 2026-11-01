@@ -43,25 +43,18 @@
   <title>League office</title>
 </svelte:head>
 
-{#if office && session}
-  <header class="header">
-    <div class="wrap header-inner" style="padding: 0.8rem 0">
-      <a class="brand" href="/leagues">
-        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path fill="#8d2f2f" d="M2.5 1.5h13v8.4L9 16.5 2.5 9.9V1.5z"/></svg>
-        <span>
-          <strong>League office</strong>
-          <p class="muted">{session.email}</p>
-        </span>
-      </a>
-      <nav class="row" aria-label="Office">
-        <a class="button {view.name.includes("league") || view.name === "schedule" ? "secondary" : "ghost"}" href="/leagues">Leagues</a>
-        <a class="button {view.name.includes("team") || view.name.includes("lineup") ? "secondary" : "ghost"}" href="/teams">Teams</a>
-        <a class="button {view.name === "account" ? "secondary" : "ghost"}" href="/account">Account</a>
-        <button class="secondary" type="button" disabled={signingOut} onclick={signOut}>{signingOut ? "Signing out…" : "Sign out"}</button>
-      </nav>
-    </div>
-  </header>
-{/if}
+<header class="header">
+  <nav class="nav" aria-label="Office">
+    <a class="brand" href={office && session ? "/leagues" : "/"}>League office</a>
+    {#if office && session}
+      <a class:current={view.name.includes("league") || view.name === "schedule"} href="/leagues">Leagues</a>
+      <a class:current={view.name.includes("team") || view.name.includes("lineup")} href="/teams">Teams</a>
+      <a class:current={view.name === "account"} href="/account">Account</a>
+      <span class="who">{session.email}</span>
+      <button class="linkish" type="button" disabled={signingOut} onclick={signOut}>{signingOut ? "Signing out…" : "Sign out"}</button>
+    {/if}
+  </nav>
+</header>
 
 <main class="wrap main">
   {#if view.name === "sign-in"}

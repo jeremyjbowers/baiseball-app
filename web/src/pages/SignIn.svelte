@@ -33,14 +33,10 @@
 </script>
 
 <div class="narrow stack">
-  <div class="brand">
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path fill="#8d2f2f" d="M2.5 1.5h13v8.4L9 16.5 2.5 9.9V1.5z"/></svg>
-    <strong>League office</strong>
-  </div>
-  <form class="card stack" onsubmit={submit}>
+  <form class="stack" onsubmit={submit}>
     <div>
       <h1>Sign in</h1>
-      <p class="muted">Enter the email on your club. The office sends a one-time link.</p>
+      <p>Enter the email on your club. The office sends a one-time link.</p>
     </div>
     {#if error}<div class="alert error" role="alert"><strong>Could not sign in</strong><p>{error}</p></div>{/if}
     <Field id="email" label="Email address">

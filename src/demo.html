@@ -7,198 +7,172 @@
   <title>Step one plate appearance</title>
   <style>
     :root {
-      --paper: #f3ecdf;
-      --ink: #1e1a16;
-      --muted: #4e463d;
-      --grass: #1f4d34;
-      --clay: #9a3412;
-      --clay-dark: #7c2a0e;
-      --board: #14261c;
-      --line: #d9cbb4;
-      --card: #fffaf3;
+      --ink: #000;
+      --muted: #4b5563;
+      --line: #d1d5db;
+      --soft: #f9fafb;
+      --stripe: #e7f6e7;
+      --danger: #b91c1c;
     }
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
     body {
       margin: 0;
-      background: var(--paper);
+      background: #fff;
       color: var(--ink);
-      font-family: "Iowan Old Style", Palatino, "Palatino Linotype", Georgia, serif;
-      line-height: 1.45;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      font-size: 0.875rem;
+      line-height: 1.25;
+      font-variant-numeric: tabular-nums;
     }
     main {
-      max-width: 960px;
-      margin: 0 auto;
-      padding: 1.25rem 1rem 3rem;
+      margin: 0;
+      padding: 1rem 0.75rem 2.5rem;
     }
     .kicker {
-      margin: 0;
-      font-family: system-ui, sans-serif;
+      margin: 0 0 0.25rem;
       font-size: 0.75rem;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--grass);
+      font-weight: 700;
     }
     h1 {
-      margin: 0.25rem 0 0.5rem;
-      font-size: clamp(1.85rem, 4.5vw, 2.7rem);
-      line-height: 1.08;
-      font-weight: 650;
+      margin: 0 0 0.5rem;
+      font-size: 1.5rem;
+      line-height: 1.33;
+      font-weight: 700;
+    }
+    h2 {
+      margin: 0 0 0.35rem;
+      font-size: 1.125rem;
+      font-weight: 700;
     }
     .lede {
-      max-width: 40rem;
-      margin: 0 0 1.25rem;
-      font-size: 1.05rem;
+      max-width: 42rem;
+      margin: 0 0 0.75rem;
     }
     .error {
-      background: #f8e6dc;
-      border: 1px solid var(--clay);
-      border-radius: 6px;
-      padding: 0.85rem 1rem;
-      margin-bottom: 1rem;
+      background: var(--soft);
+      border: 1px solid var(--line);
+      color: var(--danger);
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.75rem;
     }
-    .error h2 {
-      margin: 0 0 0.3rem;
-      font-family: system-ui, sans-serif;
-      font-size: 1rem;
-    }
+    .error h2 { margin: 0 0 0.25rem; font-size: 0.875rem; }
     .error p { margin: 0; }
     .panel {
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 1rem 1.05rem 1.15rem;
+      background: transparent;
+      border: 0;
+      border-top: 1px solid #e5e7eb;
+      padding: 0.75rem 0;
     }
-    .panel h2 {
-      margin: 0 0 0.45rem;
-      font-family: system-ui, sans-serif;
-      font-size: 0.95rem;
-      letter-spacing: 0.01em;
-    }
-    .loading {
-      margin-top: 0.5rem;
-      font-family: system-ui, sans-serif;
-      font-size: 1.15rem;
-    }
-    button, fieldset, .help, .situation, .outs, .resolving, noscript {
-      font-family: system-ui, sans-serif;
-    }
+    .loading { margin: 0.5rem 0; }
     button.primary {
       appearance: none;
-      background: var(--clay);
-      color: #fff8f3;
+      background: #111;
+      color: #fff;
       border: 0;
-      border-radius: 4px;
-      min-height: 48px;
-      padding: 0.75rem 1.15rem;
-      font-size: 1rem;
+      border-radius: 0;
+      padding: 0.25rem 0.75rem;
+      font: inherit;
+      font-size: 0.875rem;
+      text-decoration: underline;
       cursor: pointer;
     }
-    button.primary:hover:not(:disabled) { background: var(--clay-dark); }
-    button.primary:disabled { cursor: wait; opacity: 0.65; }
+    button.primary:hover:not(:disabled) { background: #333; }
+    button.primary:disabled { color: #9ca3af; background: #f3f4f6; cursor: not-allowed; }
     button:focus-visible, input:focus-visible {
-      outline: 2px solid var(--ink);
-      outline-offset: 3px;
+      outline: 1px solid #111;
+      outline-offset: 0;
     }
     .scoreboard {
-      background: var(--board);
-      color: #f6f1e6;
-      border-radius: 8px;
-      padding: 1rem 1.15rem 1.15rem;
+      background: #fff;
+      color: #000;
+      padding: 0.25rem 0 0.5rem;
       display: grid;
       grid-template-columns: 1fr auto;
-      gap: 0.35rem 1.5rem;
+      gap: 0.15rem 1.5rem;
       align-items: end;
+      border-bottom: 1px solid #9ca3af;
     }
-    .clubs { display: grid; gap: 0.2rem; }
+    .clubs { display: grid; }
     .clubs p {
       margin: 0;
       display: flex;
       justify-content: space-between;
       gap: 1.5rem;
-      font-size: 1.35rem;
+      padding: 0.15rem 0.35rem;
     }
-    .clubs strong {
-      font-variant-numeric: tabular-nums;
-      font-size: 1.9rem;
-      font-weight: 650;
-    }
+    .clubs p:nth-child(odd) { background: var(--stripe); }
+    .clubs strong { font-weight: 700; }
     .meta { text-align: right; }
-    .situation { margin: 0; font-size: 1.2rem; }
-    .outs { margin: 0.15rem 0 0; color: #d5c7b0; }
+    .situation, .outs { margin: 0; }
+    .outs { color: var(--muted); }
     .line {
       grid-column: 1 / -1;
       margin: 0.35rem 0 0;
-      font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-      font-size: 0.92rem;
-      color: #e7dcc8;
+      font-size: 0.75rem;
     }
     .columns {
       display: grid;
       grid-template-columns: 1fr 1fr;
-      gap: 1rem;
-      margin-top: 1rem;
+      gap: 0 1.5rem;
     }
     .diamond-wrap {
       display: grid;
-      grid-template-columns: 168px 1fr;
+      grid-template-columns: 7.5rem 1fr;
       gap: 0.75rem 1rem;
       align-items: center;
     }
-    .diamond { position: relative; width: 168px; height: 168px; margin: 0 auto; }
+    .diamond { position: relative; width: 120px; height: 120px; margin: 0; }
     .infield {
       position: absolute;
-      inset: 34px;
-      border: 2px solid var(--grass);
+      inset: 24px;
+      border: 1px solid #111;
       transform: rotate(45deg);
     }
     .base {
       position: absolute;
-      width: 16px;
-      height: 16px;
-      background: #cbb89a;
-      border: 2px solid var(--ink);
+      width: 12px;
+      height: 12px;
+      background: #fff;
+      border: 1px solid #111;
       transform: rotate(45deg);
     }
-    .base.on { background: var(--clay); border-color: var(--clay); }
-    .base.second { top: 22px; left: 76px; }
-    .base.third { top: 76px; left: 22px; }
-    .base.first { top: 76px; right: 22px; }
-    .base.home { bottom: 22px; left: 76px; background: var(--ink); }
+    .base.on { background: #111; }
+    .base.second { top: 16px; left: 54px; }
+    .base.third { top: 54px; left: 16px; }
+    .base.first { top: 54px; right: 16px; }
+    .base.home { bottom: 16px; left: 54px; }
     .bases { list-style: none; padding: 0; margin: 0; }
     .bases li { padding: 0.15rem 0; }
-    .play { margin: 0; font-size: 1.15rem; }
-    .decision { margin-top: 1rem; }
-    .decision p { margin: 0; font-size: 1.2rem; }
-    .final-note { margin: 0.55rem 0 0; color: var(--muted); }
+    .bases li:nth-child(odd) { background: var(--stripe); }
+    .play { margin: 0; }
+    .decision p { margin: 0; }
+    .final-note { margin: 0.35rem 0 0; color: var(--muted); }
     fieldset {
       border: 1px solid var(--line);
-      border-radius: 6px;
-      margin: 0.85rem 0 0.75rem;
-      padding: 0.35rem 0.9rem 0.7rem;
+      border-radius: 0;
+      margin: 0.75rem 0;
+      padding: 0.35rem 0.65rem 0.55rem;
     }
-    legend { padding: 0 0.3rem; }
+    legend { padding: 0 0.25rem; font-size: 0.75rem; font-weight: 700; }
     label {
       display: flex;
       align-items: center;
-      gap: 0.65rem;
-      min-height: 44px;
+      gap: 0.5rem;
+      padding: 0.2rem 0;
     }
-    .help { color: var(--muted); font-size: 0.92rem; margin: 0 0 0.9rem; }
-    .resolving { margin: 0 0 0.7rem; font-size: 1rem; }
+    .help { color: var(--muted); font-size: 0.75rem; margin: 0 0 0.75rem; }
+    .resolving { margin: 0 0 0.5rem; }
     noscript {
       display: block;
-      margin: 1rem;
-      padding: 0.8rem 1rem;
-      background: #f8e6dc;
-      border: 1px solid var(--clay);
+      margin: 0.75rem;
+      padding: 0.75rem 1rem;
+      background: var(--soft);
+      border: 1px solid var(--line);
     }
     @media (max-width: 800px) {
       .scoreboard, .columns, .diamond-wrap { grid-template-columns: 1fr; }
       .meta { text-align: left; }
-      button.primary { width: 100%; }
-      .clubs p { font-size: 1.2rem; }
-      .diamond { margin-left: 0; }
     }
   </style>
 </head>
