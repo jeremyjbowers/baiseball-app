@@ -165,23 +165,6 @@ fn owner_by_id(conn: &mut Db, owner_id: &str) -> Result<Option<Owner>, ApiError>
     .map_err(db_err)
 }
 
-fn owner_by_phone(conn: &mut Db, phone: &str) -> Result<Option<Owner>, ApiError> {
-    conn.query_row(
-        "SELECT id, email, phone, is_admin FROM owners WHERE phone = $1",
-        params!(phone),
-        |row| {
-            Ok(Owner {
-                id: row.get(0)?,
-                email: row.get(1)?,
-                phone: row.get(2)?,
-                is_admin: row.get(3)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(db_err)
-}
-
 fn is_admin(conn: &mut Db, viewer_id: &str) -> Result<bool, ApiError> {
     Ok(owner_by_id(conn, viewer_id)?.is_some_and(|owner| owner.is_admin))
 }
@@ -203,53 +186,22 @@ pub fn issue_magic_link(conn: &mut Db, body: &Value) -> Result<IssuedLink, ApiEr
         .get("channel")
         .and_then(Value::as_str)
         .unwrap_or("email");
-    let email_present = record
-        .get("email")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.trim().is_empty());
     let phone_present = record
         .get("phone")
         .and_then(Value::as_str)
         .is_some_and(|value| !value.trim().is_empty());
-    let (owner, channel, destination) = if phone_present && !email_present {
-        let phone =
-            validate::parse_phone(record.get("phone").and_then(Value::as_str).unwrap_or(""))?;
-        let owner = owner_by_phone(conn, &phone)?.ok_or_else(|| {
-            ApiError::not_found(
-                "No owner has that phone number. Sign in by email, then save a phone number.",
-            )
-        })?;
-        (owner, "sms".to_string(), phone)
-    } else if channel == "sms" {
-        let email = validate::parse_email(record.get("email"))?;
-        let owner = conn
-            .query_row(
-                "SELECT id, email, phone, is_admin FROM owners WHERE email = $1",
-                params!(email),
-                |row| {
-                    Ok(Owner {
-                        id: row.get(0)?,
-                        email: row.get(1)?,
-                        phone: row.get(2)?,
-                        is_admin: row.get(3)?,
-                    })
-                },
-            )
-            .optional()
-            .map_err(db_err)?
-            .ok_or_else(|| ApiError::bad("Sign in by email before asking for a text."))?;
-        let phone = owner
-            .phone
-            .clone()
-            .ok_or_else(|| ApiError::bad("Save a phone number before asking for a text."))?;
-        (owner, "sms".to_string(), phone)
-    } else if channel != "email" {
-        return Err(ApiError::bad("Choose email or text for the sign-in link."));
-    } else {
-        let email = validate::parse_email(record.get("email"))?;
-        let owner = upsert_owner(conn, &email)?;
-        (owner, "email".to_string(), email)
-    };
+    if phone_present || channel == "sms" {
+        return Err(ApiError::bad(
+            "Sign in with email. Text messages are turned off for now.",
+        ));
+    }
+    if channel != "email" {
+        return Err(ApiError::bad("Sign in with email."));
+    }
+    let email = validate::parse_email(record.get("email"))?;
+    let owner = upsert_owner(conn, &email)?;
+    let channel = "email".to_string();
+    let destination = email;
     let token = new_token();
     let created_at = now_iso();
     let expires_at = later_iso(Duration::minutes(15));

@@ -3,7 +3,6 @@
   import { formatWhen } from "../lib/copy.js";
 
   const issued = getPending();
-  const byText = issued?.channel === "sms";
 </script>
 
 <div class="narrow">
@@ -17,11 +16,11 @@
     <div class="card stack">
       <div>
         <h1>Sign-in link</h1>
-        <p class="muted">{byText ? `Text for ${issued.phone}` : `Email for ${issued.email}`}</p>
+        <p class="muted">Email for {issued.email}</p>
       </div>
       <div class="alert">
         <strong>Local development only</strong>
-        <p class="muted">{byText ? "No text was sent. Twilio is not configured." : "No email was sent. Mailgun is not configured."} Use the link below, or the copy in the API log.</p>
+        <p class="muted">No email was sent. Mailgun is not configured. Use the link below, or the copy in the API log.</p>
       </div>
       <div class="stack">
         <p class="slot-label">Magic link</p>
@@ -33,7 +32,7 @@
     </div>
   {:else}
     <div class="card stack">
-      <h1>{byText ? "Check your phone" : "Check your email"}</h1>
+      <h1>Check your email</h1>
       <p class="muted">A sign-in link was sent to {issued.destination}. It works once and expires {formatWhen(issued.expiresAt)}.</p>
       <a class="link" href="/">Use a different address</a>
     </div>
