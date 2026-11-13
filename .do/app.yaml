@@ -1,3 +1,5 @@
+# Not deployed. The App Platform app league-office was deleted.
+# This file is the last spec. The baiseball-pg database cluster is separate and still online.
 name: league-office
 region: nyc
 alerts:
