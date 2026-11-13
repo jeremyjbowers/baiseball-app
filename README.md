@@ -62,7 +62,7 @@ The App Platform app `league-office` is deleted. This repo no longer runs a cont
 
 `.do/app.yaml` is the last spec. It is not applied.
 
-The managed Postgres cluster `baiseball-pg` (`fcc54f23-b2a3-4ccf-a8b7-6513abcab7aa`, `db-s-1vcpu-1gb` in `nyc3`) is still online. It was a production database, so deleting the app left it in place.
+The managed Postgres cluster `baiseball-pg` (`fcc54f23-b2a3-4ccf-a8b7-6513abcab7aa`) is destroyed. It held no live data.
 
 For `sslmode=require`, the API encrypts the Postgres session and does not verify the server certificate (libpq behavior). For `sslmode=verify-ca` / `verify-full`, set `DATABASE_CA_CERT`.
 
